@@ -19,8 +19,10 @@ use eframe::egui;
 
 mod core;
 mod ui;
+mod workers;
 
 use core::types::{OutputFormat, TokenCount};
+use workers::{WorkerCommand, WorkerEvent, WorkerHandle};
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
@@ -54,6 +56,16 @@ struct FsPromptApp {
     output_format: OutputFormat,
     /// Estimated token count
     token_count: Option<TokenCount>,
+    /// Worker thread handle
+    worker: WorkerHandle,
+    /// Current progress stage
+    current_progress: Option<(workers::ProgressStage, usize, usize)>,
+    /// Error message to display
+    error_message: Option<String>,
+    /// Whether to include directory tree in output
+    include_tree: bool,
+    /// Ignore patterns input
+    ignore_patterns: String,
 }
 
 impl FsPromptApp {
@@ -68,119 +80,87 @@ impl FsPromptApp {
             is_generating: false,
             output_format: OutputFormat::Xml,
             token_count: None,
+            worker: WorkerHandle::new(),
+            current_progress: None,
+            error_message: None,
+            include_tree: true,
+            ignore_patterns: ".*,node_modules,__pycache__,target,build,dist,_*".to_string(),
         }
     }
 
     /// Generates output from selected files
     fn generate_output(&mut self) {
-        self.is_generating = true;
-        self.output_content.clear();
-
         let selected_files = self.tree.collect_selected_files();
 
         if selected_files.is_empty() {
-            self.output_content =
-                "No files selected. Please select some files to generate output.".to_string();
-            self.is_generating = false;
+            self.error_message =
+                Some("No files selected. Please select some files to generate output.".to_string());
             return;
         }
 
-        match self.output_format {
-            OutputFormat::Xml => self.generate_xml(&selected_files),
-            OutputFormat::Markdown => self.generate_markdown(&selected_files),
-        }
+        if let Some(root_path) = &self.selected_path {
+            self.is_generating = true;
+            self.output_content.clear();
+            self.token_count = None;
+            self.error_message = None;
+            self.current_progress = None;
 
-        // Calculate token count
-        self.token_count = Some(TokenCount::from_chars(self.output_content.chars().count()));
+            let command = WorkerCommand::GenerateOutput {
+                root_path: root_path.clone(),
+                selected_files,
+                format: self.output_format,
+                include_tree: self.include_tree,
+                ignore_patterns: self.ignore_patterns.clone(),
+            };
 
-        self.is_generating = false;
-    }
-
-    /// Generates XML output
-    fn generate_xml(&mut self, selected_files: &[std::path::PathBuf]) {
-        self.output_content
-            .push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        self.output_content.push_str("<codebase>\n");
-        
-        // Add directory tree
-        self.output_content.push_str("  <directory-tree>\n");
-        self.output_content.push_str("    <![CDATA[\n");
-        let tree_string = self.tree.generate_tree_string();
-        self.output_content.push_str(&tree_string);
-        self.output_content.push_str("    ]]>\n");
-        self.output_content.push_str("  </directory-tree>\n\n");
-
-        for file_path in selected_files {
-            match std::fs::read_to_string(file_path) {
-                Ok(content) => {
-                    self.output_content
-                        .push_str(&format!("  <file path=\"{}\">\n", file_path.display()));
-                    self.output_content.push_str("    <content><![CDATA[\n");
-                    self.output_content.push_str(&content);
-                    self.output_content.push_str("\n    ]]></content>\n");
-                    self.output_content.push_str("  </file>\n");
-                }
-                Err(e) => {
-                    eprintln!("Failed to read file {}: {}", file_path.display(), e);
-                    self.output_content.push_str(&format!(
-                        "  <!-- Error reading file {}: {} -->\n",
-                        file_path.display(),
-                        e
-                    ));
-                }
+            if let Err(e) = self.worker.send_command(command) {
+                self.error_message = Some(format!("Failed to start generation: {}", e));
+                self.is_generating = false;
             }
         }
-
-        self.output_content.push_str("</codebase>\n");
     }
 
-    /// Generates Markdown output
-    fn generate_markdown(&mut self, selected_files: &[std::path::PathBuf]) {
-        self.output_content.push_str("# Codebase Export\n\n");
-        self.output_content
-            .push_str(&format!("Generated {} files\n\n", selected_files.len()));
-        
-        // Add directory tree
-        self.output_content.push_str("## Directory Structure\n\n");
-        self.output_content.push_str("```\n");
-        let tree_string = self.tree.generate_tree_string();
-        self.output_content.push_str(&tree_string);
-        self.output_content.push_str("```\n\n");
-        
-        self.output_content.push_str("## File Contents\n\n");
-
-        for file_path in selected_files {
-            match std::fs::read_to_string(file_path) {
-                Ok(content) => {
-                    self.output_content
-                        .push_str(&format!("## File: {}\n\n", file_path.display()));
-
-                    // Determine file extension for syntax highlighting
-                    let extension = file_path
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .unwrap_or("");
-
-                    self.output_content.push_str(&format!("```{}\n", extension));
-                    self.output_content.push_str(&content);
-                    self.output_content.push_str("\n```\n\n");
+    /// Processes events from the worker thread
+    fn process_worker_events(&mut self, ctx: &egui::Context) {
+        while let Some(event) = self.worker.try_recv_event() {
+            match event {
+                WorkerEvent::Progress {
+                    stage,
+                    current,
+                    total,
+                } => {
+                    self.current_progress = Some((stage, current, total));
+                    ctx.request_repaint();
                 }
-                Err(e) => {
-                    eprintln!("Failed to read file {}: {}", file_path.display(), e);
-                    self.output_content.push_str(&format!(
-                        "> ⚠️ Error reading file {}: {}\n\n",
-                        file_path.display(),
-                        e
-                    ));
+                WorkerEvent::OutputReady {
+                    content,
+                    token_count,
+                } => {
+                    self.output_content = content;
+                    self.token_count = Some(TokenCount::from_chars(token_count * 4)); // Convert back from token count
+                    self.is_generating = false;
+                    self.current_progress = None;
+                    ctx.request_repaint();
+                }
+                WorkerEvent::Error(msg) => {
+                    self.error_message = Some(msg);
+                    // Don't stop generation here, as we might still get output
+                    ctx.request_repaint();
+                }
+                WorkerEvent::Cancelled => {
+                    self.is_generating = false;
+                    self.current_progress = None;
+                    self.error_message = Some("Generation cancelled".to_string());
+                    ctx.request_repaint();
                 }
             }
         }
     }
-    
+
     /// Copies the output content to clipboard
     fn copy_to_clipboard(&self) {
         use arboard::Clipboard;
-        
+
         match Clipboard::new() {
             Ok(mut clipboard) => {
                 match clipboard.set_text(&self.output_content) {
@@ -198,16 +178,16 @@ impl FsPromptApp {
             }
         }
     }
-    
+
     /// Saves the output content to a file
     fn save_to_file(&self) {
         let extension = match self.output_format {
             OutputFormat::Xml => "xml",
             OutputFormat::Markdown => "md",
         };
-        
+
         let default_filename = format!("codebase_export.{}", extension);
-        
+
         if let Some(path) = rfd::FileDialog::new()
             .set_file_name(&default_filename)
             .add_filter(&format!("{} files", extension.to_uppercase()), &[extension])
@@ -229,6 +209,9 @@ impl FsPromptApp {
 
 impl eframe::App for FsPromptApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Process worker events
+        self.process_worker_events(ctx);
+
         // Top panel with title and directory selector
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.add_space(4.0);
@@ -271,11 +254,21 @@ impl eframe::App for FsPromptApp {
                         ui.radio_value(&mut self.output_format, OutputFormat::Markdown, "Markdown");
                     });
 
+                    // Include tree checkbox
+                    ui.checkbox(&mut self.include_tree, "Include directory tree in output");
+
+                    // Ignore patterns
+                    ui.vertical(|ui| {
+                        ui.label("Ignore patterns (comma-separated):");
+                        ui.text_edit_singleline(&mut self.ignore_patterns)
+                            .on_hover_text("e.g., .*, node_modules, __pycache__, target, _*");
+                    });
+
                     ui.separator();
 
                     // Generate button
                     ui.horizontal(|ui| {
-                        let button_enabled = !self.is_generating;
+                        let button_enabled = !self.is_generating && self.selected_path.is_some();
                         if ui
                             .add_enabled(button_enabled, egui::Button::new("🚀 Generate"))
                             .clicked()
@@ -285,13 +278,38 @@ impl eframe::App for FsPromptApp {
 
                         if self.is_generating {
                             ui.spinner();
-                            ui.label("Generating...");
+
+                            if let Some((stage, current, total)) = &self.current_progress {
+                                let stage_text = match stage {
+                                    workers::ProgressStage::ScanningFiles => "Scanning files",
+                                    workers::ProgressStage::ReadingFiles => "Reading files",
+                                    workers::ProgressStage::BuildingOutput => "Building output",
+                                };
+                                ui.label(format!("{}: {}/{}", stage_text, current, total));
+                            } else {
+                                ui.label("Starting...");
+                            }
+
+                            if ui.button("Cancel").clicked() {
+                                let _ = self.worker.send_command(WorkerCommand::Cancel);
+                            }
+                        } else if self.selected_path.is_none() {
+                            ui.label("Select a directory first");
                         } else {
                             ui.label("Select files to include");
                         }
                     });
 
                     ui.separator();
+
+                    // Show error message if any
+                    if let Some(error) = &self.error_message {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(244, 67, 54),
+                            format!("⚠️ {}", error),
+                        );
+                        ui.separator();
+                    }
 
                     self.tree.show(ui);
                 });
@@ -320,20 +338,26 @@ impl eframe::App for FsPromptApp {
 
                             ui.colored_label(color, format!("◆ {} tokens", token_count.get()));
                             ui.colored_label(color, format!("[{}]", label));
-                            
+
                             ui.separator();
-                            
+
                             // Add save button
                             if ui
-                                .add_enabled(!self.output_content.is_empty(), egui::Button::new("💾 Save"))
+                                .add_enabled(
+                                    !self.output_content.is_empty(),
+                                    egui::Button::new("💾 Save"),
+                                )
                                 .clicked()
                             {
                                 self.save_to_file();
                             }
-                            
+
                             // Add copy button
                             if ui
-                                .add_enabled(!self.output_content.is_empty(), egui::Button::new("📋 Copy"))
+                                .add_enabled(
+                                    !self.output_content.is_empty(),
+                                    egui::Button::new("📋 Copy"),
+                                )
                                 .clicked()
                             {
                                 self.copy_to_clipboard();
@@ -344,7 +368,7 @@ impl eframe::App for FsPromptApp {
                             if ui.button("📋 Copy").clicked() {
                                 self.copy_to_clipboard();
                             }
-                            
+
                             if ui.button("💾 Save").clicked() {
                                 self.save_to_file();
                             }
@@ -389,6 +413,11 @@ mod tests {
             is_generating: false,
             output_format: OutputFormat::Xml,
             token_count: None,
+            worker: WorkerHandle::new(),
+            current_progress: None,
+            error_message: None,
+            include_tree: true,
+            ignore_patterns: String::new(),
         };
 
         assert!(app.selected_path.is_none());
@@ -407,6 +436,11 @@ mod tests {
             is_generating: false,
             output_format: OutputFormat::Xml,
             token_count: None,
+            worker: WorkerHandle::new(),
+            current_progress: None,
+            error_message: None,
+            include_tree: true,
+            ignore_patterns: String::new(),
         };
 
         assert_eq!(app.selected_path, Some(test_path));
@@ -422,6 +456,11 @@ mod tests {
             is_generating: false,
             output_format: OutputFormat::Xml,
             token_count: None,
+            worker: WorkerHandle::new(),
+            current_progress: None,
+            error_message: None,
+            include_tree: true,
+            ignore_patterns: String::new(),
         };
 
         // Test that Debug is implemented correctly

@@ -129,7 +129,6 @@ impl TreeNode {
             return;
         }
 
-
         let all_checked = self
             .children
             .iter()
@@ -271,7 +270,7 @@ impl DirectoryTree {
         // Add the current node
         let connector = if is_last { "└── " } else { "├── " };
         let icon = if node.is_dir { "📁" } else { "📄" };
-        
+
         output.push_str(prefix);
         output.push_str(connector);
         output.push_str(icon);
@@ -282,7 +281,7 @@ impl DirectoryTree {
         // Only process children if this is a directory with loaded children
         if node.is_dir && node.children_loaded && !node.children.is_empty() {
             let new_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
-            
+
             let child_count = node.children.len();
             for (index, child) in node.children.iter().enumerate() {
                 let is_last_child = index == child_count - 1;
