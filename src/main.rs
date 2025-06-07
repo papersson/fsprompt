@@ -198,6 +198,33 @@ impl FsPromptApp {
             }
         }
     }
+    
+    /// Saves the output content to a file
+    fn save_to_file(&self) {
+        let extension = match self.output_format {
+            OutputFormat::Xml => "xml",
+            OutputFormat::Markdown => "md",
+        };
+        
+        let default_filename = format!("codebase_export.{}", extension);
+        
+        if let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_filename)
+            .add_filter(&format!("{} files", extension.to_uppercase()), &[extension])
+            .add_filter("All files", &["*"])
+            .save_file()
+        {
+            match std::fs::write(&path, &self.output_content) {
+                Ok(()) => {
+                    // TODO: Show success toast when toast system is implemented
+                    println!("Saved to: {}", path.display());
+                }
+                Err(e) => {
+                    eprintln!("Failed to save file: {}", e);
+                }
+            }
+        }
+    }
 }
 
 impl eframe::App for FsPromptApp {
@@ -296,6 +323,14 @@ impl eframe::App for FsPromptApp {
                             
                             ui.separator();
                             
+                            // Add save button
+                            if ui
+                                .add_enabled(!self.output_content.is_empty(), egui::Button::new("💾 Save"))
+                                .clicked()
+                            {
+                                self.save_to_file();
+                            }
+                            
                             // Add copy button
                             if ui
                                 .add_enabled(!self.output_content.is_empty(), egui::Button::new("📋 Copy"))
@@ -308,6 +343,10 @@ impl eframe::App for FsPromptApp {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("📋 Copy").clicked() {
                                 self.copy_to_clipboard();
+                            }
+                            
+                            if ui.button("💾 Save").clicked() {
+                                self.save_to_file();
                             }
                         });
                     }
