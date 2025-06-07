@@ -81,6 +81,14 @@ struct FsPromptApp {
     ignore_patterns: String,
     /// Search query for filtering the tree
     search_query: String,
+    /// Output search state
+    output_search_active: bool,
+    /// Output search query
+    output_search_query: String,
+    /// Current search match index
+    output_search_match_index: usize,
+    /// Total number of search matches
+    output_search_match_count: usize,
 }
 
 impl FsPromptApp {
@@ -102,6 +110,10 @@ impl FsPromptApp {
             include_tree: true,
             ignore_patterns: ".*,node_modules,__pycache__,target,build,dist,_*".to_string(),
             search_query: String::new(),
+            output_search_active: false,
+            output_search_query: String::new(),
+            output_search_match_index: 0,
+            output_search_match_count: 0,
         }
     }
 
@@ -283,6 +295,44 @@ impl FsPromptApp {
         ui.label(job);
     }
 
+    /// Updates search match count
+    fn update_search_matches(&mut self) {
+        if self.output_search_query.is_empty() {
+            self.output_search_match_count = 0;
+            self.output_search_match_index = 0;
+            return;
+        }
+
+        let query = self.output_search_query.to_lowercase();
+        let content = self.output_content.to_lowercase();
+
+        self.output_search_match_count = content.matches(&query).count();
+
+        // Reset to first match
+        if self.output_search_match_count > 0 {
+            self.output_search_match_index = 0;
+        }
+    }
+
+    /// Navigate to next search match
+    fn next_match(&mut self) {
+        if self.output_search_match_count > 0 {
+            self.output_search_match_index =
+                (self.output_search_match_index + 1) % self.output_search_match_count;
+        }
+    }
+
+    /// Navigate to previous search match
+    fn prev_match(&mut self) {
+        if self.output_search_match_count > 0 {
+            if self.output_search_match_index == 0 {
+                self.output_search_match_index = self.output_search_match_count - 1;
+            } else {
+                self.output_search_match_index -= 1;
+            }
+        }
+    }
+
     /// Renders markdown with basic formatting
     fn render_markdown(&self, ui: &mut egui::Ui) {
         // Basic markdown rendering
@@ -324,6 +374,16 @@ impl eframe::App for FsPromptApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Process worker events
         self.process_worker_events(ctx);
+
+        // Global keyboard shortcuts
+        ctx.input(|i| {
+            // Ctrl+F for output search (only when output is available and not in tree search)
+            if i.modifiers.ctrl && i.key_pressed(egui::Key::F) && !self.output_content.is_empty() {
+                if !i.focused {
+                    self.output_search_active = true;
+                }
+            }
+        });
 
         // Top panel with title and directory selector
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
@@ -510,6 +570,52 @@ impl eframe::App for FsPromptApp {
                 });
                 ui.separator();
 
+                // Search bar for output
+                if self.output_search_active && !self.output_content.is_empty() {
+                    ui.horizontal(|ui| {
+                        ui.label("🔍 Find:");
+                        let response = ui.text_edit_singleline(&mut self.output_search_query);
+
+                        if response.changed() {
+                            self.update_search_matches();
+                        }
+
+                        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            self.output_search_active = false;
+                            self.output_search_query.clear();
+                        }
+
+                        response.request_focus();
+
+                        // Show match count and navigation
+                        if !self.output_search_query.is_empty()
+                            && self.output_search_match_count > 0
+                        {
+                            ui.label(format!(
+                                "{} / {}",
+                                self.output_search_match_index + 1,
+                                self.output_search_match_count
+                            ));
+
+                            if ui.small_button("↑").clicked() {
+                                self.prev_match();
+                            }
+
+                            if ui.small_button("↓").clicked() {
+                                self.next_match();
+                            }
+                        } else if !self.output_search_query.is_empty() {
+                            ui.label("No matches");
+                        }
+
+                        if ui.small_button("✕").clicked() {
+                            self.output_search_active = false;
+                            self.output_search_query.clear();
+                        }
+                    });
+                    ui.separator();
+                }
+
                 // Tab bar
                 if !self.output_content.is_empty() {
                     ui.horizontal(|ui| {
@@ -604,6 +710,10 @@ mod tests {
             include_tree: true,
             ignore_patterns: String::new(),
             search_query: String::new(),
+            output_search_active: false,
+            output_search_query: String::new(),
+            output_search_match_index: 0,
+            output_search_match_count: 0,
         };
 
         assert!(app.selected_path.is_none());
@@ -629,6 +739,10 @@ mod tests {
             include_tree: true,
             ignore_patterns: String::new(),
             search_query: String::new(),
+            output_search_active: false,
+            output_search_query: String::new(),
+            output_search_match_index: 0,
+            output_search_match_count: 0,
         };
 
         assert_eq!(app.selected_path, Some(test_path));
@@ -651,6 +765,10 @@ mod tests {
             include_tree: true,
             ignore_patterns: String::new(),
             search_query: String::new(),
+            output_search_active: false,
+            output_search_query: String::new(),
+            output_search_match_index: 0,
+            output_search_match_count: 0,
         };
 
         // Test that Debug is implemented correctly
