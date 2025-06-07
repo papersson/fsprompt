@@ -1,0 +1,73 @@
+//! Configuration persistence for fsPrompt
+
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig {
+    /// Window dimensions
+    pub window_width: f32,
+    pub window_height: f32,
+
+    /// Split position (0.0 to 1.0)
+    pub split_position: f32,
+
+    /// Last opened directory
+    pub last_directory: Option<PathBuf>,
+
+    /// Ignore patterns
+    pub ignore_patterns: String,
+
+    /// Include directory tree in output
+    pub include_tree: bool,
+
+    /// Last used output format
+    pub output_format: String,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            window_width: 1200.0,
+            window_height: 800.0,
+            split_position: 0.3,
+            last_directory: None,
+            ignore_patterns: String::new(),
+            include_tree: true,
+            output_format: "xml".to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConfigManager {
+    config_path: PathBuf,
+}
+
+impl ConfigManager {
+    pub fn new() -> Self {
+        let config_dir = dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("fsprompt");
+
+        // Ensure config directory exists
+        let _ = std::fs::create_dir_all(&config_dir);
+
+        Self {
+            config_path: config_dir.join("config.json"),
+        }
+    }
+
+    pub fn load(&self) -> AppConfig {
+        match std::fs::read_to_string(&self.config_path) {
+            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+            Err(_) => AppConfig::default(),
+        }
+    }
+
+    pub fn save(&self, config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_string_pretty(config)?;
+        std::fs::write(&self.config_path, json)?;
+        Ok(())
+    }
+}

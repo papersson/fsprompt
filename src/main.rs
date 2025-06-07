@@ -18,10 +18,12 @@
 use eframe::egui;
 
 mod core;
+mod state;
 mod ui;
 mod workers;
 
 use core::types::{OutputFormat, TokenCount};
+use state::{AppConfig, ConfigManager, HistoryManager, SelectionSnapshot};
 use workers::{WorkerCommand, WorkerEvent, WorkerHandle};
 
 fn main() -> eframe::Result<()> {
@@ -76,30 +78,52 @@ struct FsPromptApp {
     output_search_match_index: usize,
     /// Total number of search matches
     output_search_match_count: usize,
+    /// Configuration manager
+    config_manager: ConfigManager,
+    /// History manager for undo/redo
+    history_manager: HistoryManager,
 }
 
 impl FsPromptApp {
     /// Creates a new instance of the application
     #[must_use]
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let config_manager = ConfigManager::new();
+        let config = config_manager.load();
+
+        // Apply saved window size
+        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        // Note: Window size is set via NativeOptions in main()
+
+        let output_format = match config.output_format.as_str() {
+            "markdown" => OutputFormat::Markdown,
+            _ => OutputFormat::Xml,
+        };
+
         Self {
-            selected_path: None,
+            selected_path: config.last_directory.clone(),
             tree: ui::tree::DirectoryTree::new(),
-            split_pos: 0.3, // 30% for left panel
+            split_pos: config.split_position,
             output_content: String::new(),
             is_generating: false,
-            output_format: OutputFormat::Xml,
+            output_format,
             token_count: None,
             worker: WorkerHandle::new(),
             current_progress: None,
             error_message: None,
-            include_tree: true,
-            ignore_patterns: ".*,node_modules,__pycache__,target,build,dist,_*".to_string(),
+            include_tree: config.include_tree,
+            ignore_patterns: if config.ignore_patterns.is_empty() {
+                ".*,node_modules,__pycache__,target,build,dist,_*".to_string()
+            } else {
+                config.ignore_patterns
+            },
             search_query: String::new(),
             output_search_active: false,
             output_search_query: String::new(),
             output_search_match_index: 0,
             output_search_match_count: 0,
+            config_manager,
+            history_manager: HistoryManager::new(20),
         }
     }
 
@@ -258,6 +282,60 @@ impl FsPromptApp {
             }
         }
     }
+
+    /// Saves the current configuration
+    fn save_config(&self) {
+        let config = AppConfig {
+            window_width: 1200.0, // We'll get actual size later
+            window_height: 800.0,
+            split_position: self.split_pos,
+            last_directory: self.selected_path.clone(),
+            ignore_patterns: self.ignore_patterns.clone(),
+            include_tree: self.include_tree,
+            output_format: match self.output_format {
+                OutputFormat::Xml => "xml".to_string(),
+                OutputFormat::Markdown => "markdown".to_string(),
+            },
+        };
+
+        let _ = self.config_manager.save(&config);
+    }
+
+    /// Captures current selection state
+    fn capture_snapshot(&self) -> SelectionSnapshot {
+        SelectionSnapshot {
+            selected_files: self.tree.get_selected_files(),
+            expanded_dirs: self.tree.get_expanded_dirs(),
+        }
+    }
+
+    /// Restores a selection state
+    fn restore_snapshot(&mut self, snapshot: &SelectionSnapshot) {
+        self.tree
+            .restore_selection(&snapshot.selected_files, &snapshot.expanded_dirs);
+    }
+
+    /// Records the current state for undo
+    fn record_state(&mut self) {
+        let snapshot = self.capture_snapshot();
+        self.history_manager.push(snapshot);
+    }
+
+    /// Handles undo operation
+    fn undo(&mut self) {
+        let current = self.capture_snapshot();
+        if let Some(previous) = self.history_manager.undo(current) {
+            self.restore_snapshot(&previous);
+        }
+    }
+
+    /// Handles redo operation
+    fn redo(&mut self) {
+        let current = self.capture_snapshot();
+        if let Some(next) = self.history_manager.redo(current) {
+            self.restore_snapshot(&next);
+        }
+    }
 }
 
 impl eframe::App for FsPromptApp {
@@ -268,10 +346,12 @@ impl eframe::App for FsPromptApp {
         // Global keyboard shortcuts
         ctx.input(|i| {
             // Ctrl+F for output search (only when output is available and not in tree search)
-            if i.modifiers.ctrl && i.key_pressed(egui::Key::F) && !self.output_content.is_empty() {
-                if !i.focused {
-                    self.output_search_active = true;
-                }
+            if i.modifiers.ctrl
+                && i.key_pressed(egui::Key::F)
+                && !self.output_content.is_empty()
+                && !i.focused
+            {
+                self.output_search_active = true;
             }
 
             // Ctrl+G for Generate (when not generating and path is selected)
@@ -291,6 +371,16 @@ impl eframe::App for FsPromptApp {
             // Ctrl+S for Save (when output is available)
             if i.modifiers.ctrl && i.key_pressed(egui::Key::S) && !self.output_content.is_empty() {
                 self.save_to_file();
+            }
+
+            // Ctrl+Z for Undo
+            if i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::Z) {
+                self.undo();
+            }
+
+            // Ctrl+Shift+Z for Redo
+            if i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::Z) {
+                self.redo();
             }
         });
 
@@ -414,7 +504,16 @@ impl eframe::App for FsPromptApp {
                         ui.separator();
                     }
 
+                    // Track selection state before showing tree
+                    let snapshot_before = self.capture_snapshot();
+
                     self.tree.show_with_search(ui, &self.search_query);
+
+                    // Check if selection changed and record state
+                    let snapshot_after = self.capture_snapshot();
+                    if snapshot_before.selected_files != snapshot_after.selected_files {
+                        self.record_state();
+                    }
                 });
             });
 
@@ -554,6 +653,11 @@ impl eframe::App for FsPromptApp {
             });
         });
     }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Save configuration when exiting
+        self.save_config();
+    }
 }
 
 #[cfg(test)]
@@ -582,6 +686,8 @@ mod tests {
             output_search_query: String::new(),
             output_search_match_index: 0,
             output_search_match_count: 0,
+            config_manager: ConfigManager::new(),
+            history_manager: HistoryManager::new(20),
         };
 
         assert!(app.selected_path.is_none());
@@ -610,6 +716,8 @@ mod tests {
             output_search_query: String::new(),
             output_search_match_index: 0,
             output_search_match_count: 0,
+            config_manager: ConfigManager::new(),
+            history_manager: HistoryManager::new(20),
         };
 
         assert_eq!(app.selected_path, Some(test_path));
@@ -635,6 +743,8 @@ mod tests {
             output_search_query: String::new(),
             output_search_match_index: 0,
             output_search_match_count: 0,
+            config_manager: ConfigManager::new(),
+            history_manager: HistoryManager::new(20),
         };
 
         // Test that Debug is implemented correctly

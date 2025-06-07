@@ -3,7 +3,7 @@
 use eframe::egui;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// Selection state for tree items
@@ -473,6 +473,90 @@ impl DirectoryTree {
         }
 
         false
+    }
+
+    /// Gets all selected file paths as a set
+    pub fn get_selected_files(&self) -> HashSet<String> {
+        let mut selected = HashSet::new();
+        for root in &self.roots {
+            Self::collect_selected_paths_recursive(root, &mut selected);
+        }
+        selected
+    }
+
+    /// Gets all expanded directory paths as a set
+    pub fn get_expanded_dirs(&self) -> HashSet<String> {
+        let mut expanded = HashSet::new();
+        for root in &self.roots {
+            Self::collect_expanded_paths_recursive(root, &mut expanded);
+        }
+        expanded
+    }
+
+    /// Restores selection and expansion state
+    pub fn restore_selection(
+        &mut self,
+        selected_files: &HashSet<String>,
+        expanded_dirs: &HashSet<String>,
+    ) {
+        for root in &mut self.roots {
+            Self::restore_node_state_recursive(root, selected_files, expanded_dirs);
+        }
+
+        // Update parent states after restoring
+        for root in &mut self.roots {
+            Self::update_parent_states_recursive(root);
+        }
+    }
+
+    /// Collects selected file paths recursively
+    fn collect_selected_paths_recursive(node: &TreeNode, selected: &mut HashSet<String>) {
+        if node.selection == SelectionState::Checked && !node.is_dir {
+            selected.insert(node.path.to_string_lossy().to_string());
+        }
+
+        for child in &node.children {
+            Self::collect_selected_paths_recursive(child, selected);
+        }
+    }
+
+    /// Collects expanded directory paths recursively
+    fn collect_expanded_paths_recursive(node: &TreeNode, expanded: &mut HashSet<String>) {
+        if node.is_dir && node.expanded {
+            expanded.insert(node.path.to_string_lossy().to_string());
+        }
+
+        for child in &node.children {
+            Self::collect_expanded_paths_recursive(child, expanded);
+        }
+    }
+
+    /// Restores node state recursively
+    fn restore_node_state_recursive(
+        node: &mut TreeNode,
+        selected_files: &HashSet<String>,
+        expanded_dirs: &HashSet<String>,
+    ) {
+        let path_str = node.path.to_string_lossy().to_string();
+
+        // Restore expansion state
+        if node.is_dir && expanded_dirs.contains(&path_str) {
+            node.expanded = true;
+            // Load children if not already loaded
+            if !node.children_loaded {
+                node.load_children();
+            }
+        }
+
+        // Restore selection state
+        if !node.is_dir && selected_files.contains(&path_str) {
+            node.selection = SelectionState::Checked;
+        }
+
+        // Recursively restore children
+        for child in &mut node.children {
+            Self::restore_node_state_recursive(child, selected_files, expanded_dirs);
+        }
     }
 }
 
