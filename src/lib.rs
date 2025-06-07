@@ -1,0 +1,22 @@
+#![warn(
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo,
+    rust_2018_idioms,
+    missing_debug_implementations,
+    missing_docs
+)]
+#![allow(clippy::module_name_repetitions)] // Common in Rust APIs
+#![allow(clippy::must_use_candidate)] // We'll add these selectively
+
+//! fsPrompt - A high-performance filesystem prompt generator for LLMs
+//!
+//! This library provides the core functionality for generating context prompts from codebases.
+
+pub mod core;
+pub mod state;
+pub mod ui;
+pub mod utils;
+pub mod watcher;
+pub mod workers;

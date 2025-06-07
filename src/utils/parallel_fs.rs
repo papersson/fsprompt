@@ -1,0 +1,245 @@
+//! Parallel filesystem operations for improved performance
+
+use ignore::{WalkBuilder, WalkState, overrides::OverrideBuilder};
+use rayon::prelude::*;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+/// Result of a parallel directory scan
+#[derive(Debug, Clone)]
+pub struct DirectoryEntry {
+    /// The full path to the entry
+    pub path: PathBuf,
+    /// Whether this is a directory
+    pub is_dir: bool,
+    /// The file/directory name
+    pub name: String,
+    /// Parent directory path (if any)
+    pub parent: Option<PathBuf>,
+}
+
+/// Performs a parallel directory scan up to a specified depth
+pub fn scan_directory_parallel(
+    root: &Path,
+    max_depth: Option<usize>,
+    ignore_patterns: &[String],
+) -> Vec<DirectoryEntry> {
+    let entries = Arc::new(Mutex::new(Vec::new()));
+    let entries_clone = Arc::clone(&entries);
+
+    let mut builder = WalkBuilder::new(root);
+
+    // Configure the walker
+    builder
+        .standard_filters(false) // Don't use .gitignore by default
+        .hidden(false) // Show hidden files
+        .parents(false) // Don't look for .gitignore in parent dirs
+        .follow_links(false) // Don't follow symlinks
+        .threads(num_cpus::get().min(8)); // Use up to 8 threads
+
+    if let Some(depth) = max_depth {
+        builder.max_depth(Some(depth));
+    }
+
+    // Add ignore patterns
+    if !ignore_patterns.is_empty() {
+        let mut override_builder = OverrideBuilder::new(root);
+        for pattern in ignore_patterns {
+            if let Err(e) = override_builder.add(&format!("!{}", pattern)) {
+                eprintln!("Invalid ignore pattern '{}': {}", pattern, e);
+            }
+        }
+        if let Ok(overrides) = override_builder.build() {
+            builder.overrides(overrides);
+        }
+    }
+
+    let walker = builder.build_parallel();
+
+    walker.run(|| {
+        let entries = Arc::clone(&entries_clone);
+        Box::new(move |result| {
+            if let Ok(entry) = result {
+                let path = entry.path().to_path_buf();
+                let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let parent = path.parent().map(|p| p.to_path_buf());
+
+                let dir_entry = DirectoryEntry {
+                    path,
+                    is_dir,
+                    name,
+                    parent,
+                };
+
+                entries.lock().unwrap().push(dir_entry);
+            }
+            WalkState::Continue
+        })
+    });
+
+    let entries = entries.lock().unwrap();
+    entries.clone()
+}
+
+/// Builds a hierarchical tree structure from flat entries
+pub fn build_tree_from_entries(
+    entries: Vec<DirectoryEntry>,
+) -> HashMap<PathBuf, Vec<DirectoryEntry>> {
+    let mut tree: HashMap<PathBuf, Vec<DirectoryEntry>> = HashMap::new();
+
+    // Group entries by parent
+    for entry in entries {
+        if let Some(parent) = &entry.parent {
+            tree.entry(parent.clone())
+                .or_insert_with(Vec::new)
+                .push(entry);
+        }
+    }
+
+    // Sort children in each group (directories first, then alphabetically)
+    for children in tree.values_mut() {
+        children.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        });
+    }
+
+    tree
+}
+
+/// Parallel file reading with memory mapping for large files
+pub fn read_files_parallel(
+    file_paths: &[PathBuf],
+    use_mmap_threshold: usize,
+) -> Vec<(PathBuf, Result<String, String>)> {
+    file_paths
+        .par_iter()
+        .map(|path| {
+            let result = if let Ok(metadata) = std::fs::metadata(path) {
+                if metadata.len() as usize > use_mmap_threshold {
+                    // Use memory-mapped reading for large files
+                    read_file_mmap(path)
+                } else {
+                    // Use standard reading for small files
+                    std::fs::read_to_string(path).map_err(|e| e.to_string())
+                }
+            } else {
+                Err("Failed to get file metadata".to_string())
+            };
+
+            (path.clone(), result)
+        })
+        .collect()
+}
+
+/// Read a file using memory mapping
+fn read_file_mmap(path: &Path) -> Result<String, String> {
+    use memmap2::Mmap;
+    use std::fs::File;
+
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let mmap = unsafe { Mmap::map(&file) }.map_err(|e| e.to_string())?;
+
+    // Convert to string, handling UTF-8 errors
+    String::from_utf8(mmap.to_vec()).map_err(|e| format!("UTF-8 error: {}", e))
+}
+
+/// Pattern cache for improved glob matching performance
+pub struct PatternCache {
+    /// Compiled glob patterns
+    globs: Vec<glob::Pattern>,
+    /// Compiled regex patterns (as alternative)
+    regexes: Vec<regex::Regex>,
+}
+
+impl PatternCache {
+    /// Create a new pattern cache from glob patterns
+    pub fn new(patterns: &[String]) -> Self {
+        let globs = patterns
+            .iter()
+            .filter_map(|p| glob::Pattern::new(p).ok())
+            .collect();
+
+        let regexes = patterns
+            .iter()
+            .filter_map(|p| {
+                // Convert glob to regex
+                let regex_str = p
+                    .replace('.', "\\.")
+                    .replace('*', "[^/]*")
+                    .replace("**", ".*")
+                    .replace('{', "(")
+                    .replace('}', ")")
+                    .replace(',', "|");
+                regex::Regex::new(&format!("^{}$", regex_str)).ok()
+            })
+            .collect();
+
+        Self { globs, regexes }
+    }
+
+    /// Check if a path matches any pattern
+    pub fn matches(&self, path: &str) -> bool {
+        // Try glob patterns first
+        for pattern in &self.globs {
+            if pattern.matches(path) {
+                return true;
+            }
+        }
+
+        // Fall back to regex if needed
+        for pattern in &self.regexes {
+            if pattern.is_match(path) {
+                return true;
+            }
+        }
+
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_parallel_scan() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        // Create test structure
+        fs::create_dir(root.join("dir1")).unwrap();
+        fs::create_dir(root.join("dir2")).unwrap();
+        fs::write(root.join("file1.txt"), "content").unwrap();
+        fs::write(root.join("dir1/file2.txt"), "content").unwrap();
+
+        let entries = scan_directory_parallel(root, Some(2), &[]);
+
+        assert!(entries.len() >= 4); // root + 2 dirs + 2 files
+
+        let tree = build_tree_from_entries(entries);
+        assert!(tree.contains_key(root));
+    }
+
+    #[test]
+    fn test_pattern_cache() {
+        let patterns = vec![
+            "*.rs".to_string(),
+            "target/**".to_string(),
+            "*.{txt,md}".to_string(),
+        ];
+
+        let cache = PatternCache::new(&patterns);
+
+        assert!(cache.matches("main.rs"));
+        assert!(cache.matches("target/debug/build"));
+        assert!(cache.matches("readme.txt"));
+        assert!(cache.matches("doc.md"));
+        assert!(!cache.matches("main.py"));
+    }
+}
