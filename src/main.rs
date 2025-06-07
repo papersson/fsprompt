@@ -101,6 +101,14 @@ impl FsPromptApp {
         self.output_content
             .push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         self.output_content.push_str("<codebase>\n");
+        
+        // Add directory tree
+        self.output_content.push_str("  <directory-tree>\n");
+        self.output_content.push_str("    <![CDATA[\n");
+        let tree_string = self.tree.generate_tree_string();
+        self.output_content.push_str(&tree_string);
+        self.output_content.push_str("    ]]>\n");
+        self.output_content.push_str("  </directory-tree>\n\n");
 
         for file_path in selected_files {
             match std::fs::read_to_string(file_path) {
@@ -131,6 +139,15 @@ impl FsPromptApp {
         self.output_content.push_str("# Codebase Export\n\n");
         self.output_content
             .push_str(&format!("Generated {} files\n\n", selected_files.len()));
+        
+        // Add directory tree
+        self.output_content.push_str("## Directory Structure\n\n");
+        self.output_content.push_str("```\n");
+        let tree_string = self.tree.generate_tree_string();
+        self.output_content.push_str(&tree_string);
+        self.output_content.push_str("```\n\n");
+        
+        self.output_content.push_str("## File Contents\n\n");
 
         for file_path in selected_files {
             match std::fs::read_to_string(file_path) {

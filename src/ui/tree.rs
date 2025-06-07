@@ -252,6 +252,45 @@ impl DirectoryTree {
         selected
     }
 
+    /// Generates a string representation of the entire directory tree
+    pub fn generate_tree_string(&self) -> String {
+        let mut output = String::new();
+        for root in &self.roots {
+            Self::generate_tree_string_recursive(root, &mut output, "", true);
+        }
+        output
+    }
+
+    /// Recursively generates tree string with proper formatting
+    fn generate_tree_string_recursive(
+        node: &TreeNode,
+        output: &mut String,
+        prefix: &str,
+        is_last: bool,
+    ) {
+        // Add the current node
+        let connector = if is_last { "└── " } else { "├── " };
+        let icon = if node.is_dir { "📁" } else { "📄" };
+        
+        output.push_str(prefix);
+        output.push_str(connector);
+        output.push_str(icon);
+        output.push(' ');
+        output.push_str(&node.name);
+        output.push('\n');
+
+        // Only process children if this is a directory with loaded children
+        if node.is_dir && node.children_loaded && !node.children.is_empty() {
+            let new_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+            
+            let child_count = node.children.len();
+            for (index, child) in node.children.iter().enumerate() {
+                let is_last_child = index == child_count - 1;
+                Self::generate_tree_string_recursive(child, output, &new_prefix, is_last_child);
+            }
+        }
+    }
+
     /// Helper function to collect selected files from a node recursively
     fn collect_selected_from_node(node: &TreeNode, selected: &mut Vec<PathBuf>) {
         match node.selection {
