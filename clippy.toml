@@ -1,0 +1,13 @@
+# Clippy configuration for fsPrompt
+
+# Set the maximum cognitive complexity allowed
+cognitive-complexity-threshold = 30
+
+# Set the maximum number of lines allowed in a function
+too-many-lines-threshold = 100
+
+# Set the maximum number of arguments allowed in a function
+too-many-arguments-threshold = 7
+
+# Enforce documentation
+missing-docs-in-crate-items = true
