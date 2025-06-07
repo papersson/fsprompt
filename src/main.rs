@@ -24,17 +24,6 @@ mod workers;
 use core::types::{OutputFormat, TokenCount};
 use workers::{WorkerCommand, WorkerEvent, WorkerHandle};
 
-/// Output viewer tabs
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputTab {
-    /// Raw output as generated
-    Raw,
-    /// Pretty formatted XML (if XML format)
-    PrettyXml,
-    /// Rendered Markdown (if Markdown format)
-    RenderedMarkdown,
-}
-
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -61,8 +50,6 @@ struct FsPromptApp {
     split_pos: f32,
     /// Generated output content
     output_content: String,
-    /// Currently selected output tab
-    selected_tab: OutputTab,
     /// Whether we're currently generating output
     is_generating: bool,
     /// Current output format
@@ -100,7 +87,6 @@ impl FsPromptApp {
             tree: ui::tree::DirectoryTree::new(),
             split_pos: 0.3, // 30% for left panel
             output_content: String::new(),
-            selected_tab: OutputTab::Raw,
             is_generating: false,
             output_format: OutputFormat::Xml,
             token_count: None,
@@ -235,66 +221,6 @@ impl FsPromptApp {
         }
     }
 
-    /// Renders pretty formatted XML
-    fn render_pretty_xml(&self, ui: &mut egui::Ui) {
-        // For now, just display with syntax highlighting
-        // In a full implementation, we'd parse and pretty-print the XML
-        ui.style_mut().override_font_id = Some(egui::FontId::monospace(12.0));
-
-        // Simple XML syntax highlighting
-        let mut job = egui::text::LayoutJob::default();
-
-        for line in self.output_content.lines() {
-            let trimmed = line.trim();
-
-            if trimmed.starts_with("<?xml") || trimmed.starts_with("<!") {
-                // XML declaration or DOCTYPE
-                job.append(
-                    line,
-                    0.0,
-                    egui::TextFormat {
-                        color: egui::Color32::from_rgb(128, 128, 128),
-                        ..Default::default()
-                    },
-                );
-            } else if trimmed.starts_with('<') && !trimmed.starts_with("</") {
-                // Opening tags
-                if let Some(end) = line.find('>') {
-                    let tag_part = &line[..=end];
-                    let rest = &line[end + 1..];
-
-                    job.append(
-                        tag_part,
-                        0.0,
-                        egui::TextFormat {
-                            color: egui::Color32::from_rgb(34, 139, 34),
-                            ..Default::default()
-                        },
-                    );
-                    job.append(rest, 0.0, egui::TextFormat::default());
-                } else {
-                    job.append(line, 0.0, egui::TextFormat::default());
-                }
-            } else if trimmed.starts_with("</") {
-                // Closing tags
-                job.append(
-                    line,
-                    0.0,
-                    egui::TextFormat {
-                        color: egui::Color32::from_rgb(34, 139, 34),
-                        ..Default::default()
-                    },
-                );
-            } else {
-                // Content
-                job.append(line, 0.0, egui::TextFormat::default());
-            }
-            job.append("\n", 0.0, egui::TextFormat::default());
-        }
-
-        ui.label(job);
-    }
-
     /// Updates search match count
     fn update_search_matches(&mut self) {
         if self.output_search_query.is_empty() {
@@ -329,42 +255,6 @@ impl FsPromptApp {
                 self.output_search_match_index = self.output_search_match_count - 1;
             } else {
                 self.output_search_match_index -= 1;
-            }
-        }
-    }
-
-    /// Renders markdown with basic formatting
-    fn render_markdown(&self, ui: &mut egui::Ui) {
-        // Basic markdown rendering
-        for line in self.output_content.lines() {
-            let trimmed = line.trim();
-
-            if trimmed.starts_with("# ") {
-                // H1
-                ui.style_mut().override_font_id = Some(egui::FontId::proportional(20.0));
-                ui.label(&trimmed[2..]);
-            } else if trimmed.starts_with("## ") {
-                // H2
-                ui.style_mut().override_font_id = Some(egui::FontId::proportional(18.0));
-                ui.label(&trimmed[3..]);
-            } else if trimmed.starts_with("### ") {
-                // H3
-                ui.style_mut().override_font_id = Some(egui::FontId::proportional(16.0));
-                ui.label(&trimmed[4..]);
-            } else if trimmed.starts_with("```") {
-                // Code block - just show in monospace
-                ui.style_mut().override_font_id = Some(egui::FontId::monospace(12.0));
-                ui.label(line);
-            } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-                // List item
-                ui.horizontal(|ui| {
-                    ui.label("•");
-                    ui.label(&trimmed[2..]);
-                });
-            } else {
-                // Regular text
-                ui.style_mut().override_font_id = Some(egui::FontId::proportional(14.0));
-                ui.label(line);
             }
         }
     }
@@ -646,70 +536,19 @@ impl eframe::App for FsPromptApp {
                     ui.separator();
                 }
 
-                // Tab bar
-                if !self.output_content.is_empty() {
-                    ui.horizontal(|ui| {
-                        if ui
-                            .selectable_label(self.selected_tab == OutputTab::Raw, "Raw")
-                            .clicked()
-                        {
-                            self.selected_tab = OutputTab::Raw;
-                        }
-
-                        match self.output_format {
-                            OutputFormat::Xml => {
-                                if ui
-                                    .selectable_label(
-                                        self.selected_tab == OutputTab::PrettyXml,
-                                        "Pretty XML",
-                                    )
-                                    .clicked()
-                                {
-                                    self.selected_tab = OutputTab::PrettyXml;
-                                }
-                            }
-                            OutputFormat::Markdown => {
-                                if ui
-                                    .selectable_label(
-                                        self.selected_tab == OutputTab::RenderedMarkdown,
-                                        "Rendered",
-                                    )
-                                    .clicked()
-                                {
-                                    self.selected_tab = OutputTab::RenderedMarkdown;
-                                }
-                            }
-                        }
-                    });
-                    ui.separator();
-                }
-
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         if self.output_content.is_empty() {
                             ui.label("Generated output will appear here...");
                         } else {
-                            match self.selected_tab {
-                                OutputTab::Raw => {
-                                    // Use monospace font for code output
-                                    ui.style_mut().override_font_id =
-                                        Some(egui::FontId::monospace(12.0));
-                                    ui.add(
-                                        egui::TextEdit::multiline(
-                                            &mut self.output_content.as_str(),
-                                        )
-                                        .desired_width(f32::INFINITY)
-                                        .interactive(false),
-                                    );
-                                }
-                                OutputTab::PrettyXml => {
-                                    self.render_pretty_xml(ui);
-                                }
-                                OutputTab::RenderedMarkdown => {
-                                    self.render_markdown(ui);
-                                }
-                            }
+                            // Use monospace font for code output
+                            ui.style_mut().override_font_id = Some(egui::FontId::monospace(12.0));
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.output_content.as_str())
+                                    .desired_width(f32::INFINITY)
+                                    .interactive(false),
+                            );
                         }
                     });
             });
@@ -730,7 +569,6 @@ mod tests {
             tree: ui::tree::DirectoryTree::new(),
             split_pos: 0.3,
             output_content: String::new(),
-            selected_tab: OutputTab::Raw,
             is_generating: false,
             output_format: OutputFormat::Xml,
             token_count: None,
@@ -759,7 +597,6 @@ mod tests {
             tree: ui::tree::DirectoryTree::new(),
             split_pos: 0.3,
             output_content: String::new(),
-            selected_tab: OutputTab::Raw,
             is_generating: false,
             output_format: OutputFormat::Xml,
             token_count: None,
@@ -785,7 +622,6 @@ mod tests {
             tree: ui::tree::DirectoryTree::new(),
             split_pos: 0.3,
             output_content: String::new(),
-            selected_tab: OutputTab::Raw,
             is_generating: false,
             output_format: OutputFormat::Xml,
             token_count: None,
