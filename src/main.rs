@@ -383,6 +383,25 @@ impl eframe::App for FsPromptApp {
                     self.output_search_active = true;
                 }
             }
+
+            // Ctrl+G for Generate (when not generating and path is selected)
+            if i.modifiers.ctrl
+                && i.key_pressed(egui::Key::G)
+                && !self.is_generating
+                && self.selected_path.is_some()
+            {
+                self.generate_output();
+            }
+
+            // Ctrl+C for Copy (when output is available)
+            if i.modifiers.ctrl && i.key_pressed(egui::Key::C) && !self.output_content.is_empty() {
+                self.copy_to_clipboard();
+            }
+
+            // Ctrl+S for Save (when output is available)
+            if i.modifiers.ctrl && i.key_pressed(egui::Key::S) && !self.output_content.is_empty() {
+                self.save_to_file();
+            }
         });
 
         // Top panel with title and directory selector
@@ -464,6 +483,7 @@ impl eframe::App for FsPromptApp {
                         let button_enabled = !self.is_generating && self.selected_path.is_some();
                         if ui
                             .add_enabled(button_enabled, egui::Button::new("🚀 Generate"))
+                            .on_hover_text("Generate output (Ctrl+G)")
                             .clicked()
                         {
                             self.generate_output();
@@ -540,6 +560,7 @@ impl eframe::App for FsPromptApp {
                                     !self.output_content.is_empty(),
                                     egui::Button::new("💾 Save"),
                                 )
+                                .on_hover_text("Save to file (Ctrl+S)")
                                 .clicked()
                             {
                                 self.save_to_file();
@@ -551,6 +572,7 @@ impl eframe::App for FsPromptApp {
                                     !self.output_content.is_empty(),
                                     egui::Button::new("📋 Copy"),
                                 )
+                                .on_hover_text("Copy to clipboard (Ctrl+C)")
                                 .clicked()
                             {
                                 self.copy_to_clipboard();
@@ -558,11 +580,19 @@ impl eframe::App for FsPromptApp {
                         });
                     } else if !self.output_content.is_empty() {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("📋 Copy").clicked() {
+                            if ui
+                                .button("📋 Copy")
+                                .on_hover_text("Copy to clipboard (Ctrl+C)")
+                                .clicked()
+                            {
                                 self.copy_to_clipboard();
                             }
 
-                            if ui.button("💾 Save").clicked() {
+                            if ui
+                                .button("💾 Save")
+                                .on_hover_text("Save to file (Ctrl+S)")
+                                .clicked()
+                            {
                                 self.save_to_file();
                             }
                         });
