@@ -176,6 +176,28 @@ impl FsPromptApp {
             }
         }
     }
+    
+    /// Copies the output content to clipboard
+    fn copy_to_clipboard(&self) {
+        use arboard::Clipboard;
+        
+        match Clipboard::new() {
+            Ok(mut clipboard) => {
+                match clipboard.set_text(&self.output_content) {
+                    Ok(()) => {
+                        // TODO: Show success toast when toast system is implemented
+                        println!("Copied to clipboard!");
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to copy to clipboard: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to access clipboard: {}", e);
+            }
+        }
+    }
 }
 
 impl eframe::App for FsPromptApp {
@@ -271,6 +293,22 @@ impl eframe::App for FsPromptApp {
 
                             ui.colored_label(color, format!("◆ {} tokens", token_count.get()));
                             ui.colored_label(color, format!("[{}]", label));
+                            
+                            ui.separator();
+                            
+                            // Add copy button
+                            if ui
+                                .add_enabled(!self.output_content.is_empty(), egui::Button::new("📋 Copy"))
+                                .clicked()
+                            {
+                                self.copy_to_clipboard();
+                            }
+                        });
+                    } else if !self.output_content.is_empty() {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("📋 Copy").clicked() {
+                                self.copy_to_clipboard();
+                            }
                         });
                     }
                 });
