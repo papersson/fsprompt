@@ -66,6 +66,8 @@ struct FsPromptApp {
     include_tree: bool,
     /// Ignore patterns input
     ignore_patterns: String,
+    /// Search query for filtering the tree
+    search_query: String,
 }
 
 impl FsPromptApp {
@@ -85,6 +87,7 @@ impl FsPromptApp {
             error_message: None,
             include_tree: true,
             ignore_patterns: ".*,node_modules,__pycache__,target,build,dist,_*".to_string(),
+            search_query: String::new(),
         }
     }
 
@@ -266,6 +269,26 @@ impl eframe::App for FsPromptApp {
 
                     ui.separator();
 
+                    // Search bar
+                    ui.horizontal(|ui| {
+                        ui.label("🔍");
+                        let response = ui
+                            .text_edit_singleline(&mut self.search_query)
+                            .on_hover_text("Search for files and folders");
+
+                        // Clear button
+                        if !self.search_query.is_empty() && ui.small_button("✕").clicked() {
+                            self.search_query.clear();
+                        }
+
+                        // Focus on Ctrl+F
+                        if ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F)) {
+                            response.request_focus();
+                        }
+                    });
+
+                    ui.separator();
+
                     // Generate button
                     ui.horizontal(|ui| {
                         let button_enabled = !self.is_generating && self.selected_path.is_some();
@@ -311,7 +334,7 @@ impl eframe::App for FsPromptApp {
                         ui.separator();
                     }
 
-                    self.tree.show(ui);
+                    self.tree.show_with_search(ui, &self.search_query);
                 });
             });
 
@@ -418,6 +441,7 @@ mod tests {
             error_message: None,
             include_tree: true,
             ignore_patterns: String::new(),
+            search_query: String::new(),
         };
 
         assert!(app.selected_path.is_none());
@@ -441,6 +465,7 @@ mod tests {
             error_message: None,
             include_tree: true,
             ignore_patterns: String::new(),
+            search_query: String::new(),
         };
 
         assert_eq!(app.selected_path, Some(test_path));
@@ -461,6 +486,7 @@ mod tests {
             error_message: None,
             include_tree: true,
             ignore_patterns: String::new(),
+            search_query: String::new(),
         };
 
         // Test that Debug is implemented correctly

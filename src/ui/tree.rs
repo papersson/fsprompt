@@ -1,6 +1,8 @@
 //! Directory tree UI component with lazy loading and tri-state selection
 
 use eframe::egui;
+use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -209,13 +211,30 @@ impl DirectoryTree {
 
     /// Renders the tree UI
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        self.show_with_search(ui, "");
+    }
+
+    /// Renders the tree UI with search filtering
+    pub fn show_with_search(&mut self, ui: &mut egui::Ui, search_query: &str) {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 // We need to handle the recursive rendering carefully
                 // to avoid mutable borrow issues
                 if !self.roots.is_empty() {
-                    let selection_changed = Self::show_nodes(ui, &mut self.roots[0], 0);
+                    let matcher = if search_query.is_empty() {
+                        None
+                    } else {
+                        Some(SkimMatcherV2::default())
+                    };
+
+                    let selection_changed = Self::show_nodes_with_search(
+                        ui,
+                        &mut self.roots[0],
+                        0,
+                        search_query,
+                        matcher.as_ref(),
+                    );
 
                     // If any selection changed, update parent states
                     if selection_changed {
@@ -320,12 +339,45 @@ impl DirectoryTree {
 
     /// Renders nodes recursively
     fn show_nodes(ui: &mut egui::Ui, node: &mut TreeNode, depth: usize) -> bool {
+        Self::show_nodes_with_search(ui, node, depth, "", None)
+    }
+
+    /// Renders nodes recursively with search filtering
+    fn show_nodes_with_search(
+        ui: &mut egui::Ui,
+        node: &mut TreeNode,
+        depth: usize,
+        search_query: &str,
+        matcher: Option<&SkimMatcherV2>,
+    ) -> bool {
         // Safety: prevent stack overflow on extremely deep directories
         const MAX_DEPTH: usize = 50;
         if depth > MAX_DEPTH {
             ui.label("⚠️ Directory too deep to display");
             return false;
         }
+
+        // Check if this node matches the search
+        let should_show = if let Some(matcher) = matcher {
+            // Check if the node name matches
+            let node_matches = matcher.fuzzy_match(&node.name, search_query).is_some();
+
+            // For directories, also check if any child matches
+            let children_match = if node.is_dir {
+                Self::has_matching_child(node, search_query, matcher)
+            } else {
+                false
+            };
+
+            node_matches || children_match
+        } else {
+            true // No search, show everything
+        };
+
+        if !should_show {
+            return false;
+        }
+
         let indent = depth as f32 * 20.0;
         let mut any_selection_changed = false;
 
@@ -386,14 +438,41 @@ impl DirectoryTree {
 
         // Show children if expanded
         if node.is_dir && node.expanded {
+            // Auto-expand when searching to show matching children
+            if matcher.is_some() && !node.children_loaded {
+                node.load_children();
+            }
+
             for child in &mut node.children {
-                if Self::show_nodes(ui, child, depth + 1) {
+                if Self::show_nodes_with_search(ui, child, depth + 1, search_query, matcher) {
                     any_selection_changed = true;
                 }
             }
         }
 
         any_selection_changed
+    }
+
+    /// Checks if a node has any children that match the search query
+    fn has_matching_child(node: &TreeNode, search_query: &str, matcher: &SkimMatcherV2) -> bool {
+        // If children aren't loaded yet, we can't check
+        if !node.children_loaded {
+            return true; // Assume there might be matches
+        }
+
+        for child in &node.children {
+            // Check if this child matches
+            if matcher.fuzzy_match(&child.name, search_query).is_some() {
+                return true;
+            }
+
+            // Recursively check child directories
+            if child.is_dir && Self::has_matching_child(child, search_query, matcher) {
+                return true;
+            }
+        }
+
+        false
     }
 }
 
