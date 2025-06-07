@@ -1,9 +1,11 @@
 //! User interface components for fsPrompt
 
+pub mod theme;
 pub mod toast;
 pub mod tree;
 
 pub use crate::core::types::OutputFormat;
+pub use theme::{BgLevel, TextEmphasis, Theme};
 
 use std::path::Path;
 

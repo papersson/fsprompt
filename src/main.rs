@@ -26,7 +26,7 @@ pub mod workers;
 
 use core::types::{OutputFormat, TokenCount};
 use state::{AppConfig, ConfigManager, HistoryManager, SelectionSnapshot};
-use ui::toast::ToastManager;
+use ui::{Theme, toast::ToastManager};
 use utils::perf::PerfOverlay;
 use watcher::FsWatcher;
 use workers::{WorkerCommand, WorkerEvent, WorkerHandle};
@@ -154,19 +154,12 @@ impl FsPromptApp {
 
     /// Apply theme to context
     fn apply_theme_to_ctx(ctx: &egui::Context, theme: &str) {
-        let visuals = match theme {
-            "dark" => egui::Visuals::dark(),
-            "light" => egui::Visuals::light(),
-            "auto" | _ => {
-                // Auto-detect system theme
-                if Self::prefers_dark_theme() {
-                    egui::Visuals::dark()
-                } else {
-                    egui::Visuals::light()
-                }
-            }
+        let dark_mode = match theme {
+            "dark" => true,
+            "light" => false,
+            "auto" | _ => Self::prefers_dark_theme(),
         };
-        ctx.set_visuals(visuals);
+        Theme::apply_theme(ctx, dark_mode);
     }
 
     /// Detect system theme preference
@@ -485,83 +478,90 @@ impl eframe::App for FsPromptApp {
             }
         });
 
+        // Determine current theme mode for styling
+        let dark_mode = match self.theme.as_str() {
+            "dark" => true,
+            "light" => false,
+            _ => Self::prefers_dark_theme(),
+        };
+
         // Top panel with title and directory selector
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.heading("fsPrompt");
-                ui.separator();
+        egui::TopBottomPanel::top("top_panel")
+            .exact_height(Theme::TOP_BAR_HEIGHT)
+            .show(ctx, |ui| {
+                ui.add_space(Theme::SPACING_SM);
+                ui.horizontal(|ui| {
+                    ui.heading("fsPrompt");
+                    ui.add_space(Theme::SPACING_MD);
 
-                if ui.button("Select Directory").clicked() {
-                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                        self.selected_path = Some(path.clone());
-                        self.tree.set_ignore_patterns(&self.ignore_patterns);
-                        self.tree.set_root(path.clone());
+                    if ui.button("📁 Select Directory").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                            self.selected_path = Some(path.clone());
+                            self.tree.set_ignore_patterns(&self.ignore_patterns);
+                            self.tree.set_root(path.clone());
 
-                        // Start watching the directory
-                        if let Err(e) = self.fs_watcher.watch(&path) {
-                            self.toast_manager
-                                .warning(format!("Failed to watch directory: {}", e));
+                            // Start watching the directory
+                            if let Err(e) = self.fs_watcher.watch(&path) {
+                                self.toast_manager
+                                    .warning(format!("Failed to watch directory: {}", e));
+                            }
+
+                            self.files_changed = false;
+                            self.toast_manager.success(format!(
+                                "Loaded {}",
+                                path.file_name().unwrap_or_default().to_string_lossy()
+                            ));
                         }
-
-                        self.files_changed = false;
-                        self.toast_manager.success(format!(
-                            "Loaded {}",
-                            path.file_name().unwrap_or_default().to_string_lossy()
-                        ));
                     }
-                }
 
-                if let Some(path) = &self.selected_path {
-                    ui.label(format!("Selected: {}", path.display()));
-                }
+                    if let Some(path) = &self.selected_path {
+                        ui.add_space(Theme::SPACING_SM);
+                        ui.label(format!("📂 {}", path.display()));
+                    }
 
-                // Theme toggle on the right
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.menu_button("🎨 Theme", |ui| {
-                        if ui
-                            .radio_value(&mut self.theme, "auto".to_string(), "Auto")
-                            .clicked()
-                        {
-                            Self::apply_theme_to_ctx(ctx, &self.theme);
-                            self.save_config();
-                            self.toast_manager.success("Theme set to Auto");
-                        }
-                        if ui
-                            .radio_value(&mut self.theme, "light".to_string(), "Light")
-                            .clicked()
-                        {
-                            Self::apply_theme_to_ctx(ctx, &self.theme);
-                            self.save_config();
-                            self.toast_manager.success("Theme set to Light");
-                        }
-                        if ui
-                            .radio_value(&mut self.theme, "dark".to_string(), "Dark")
-                            .clicked()
-                        {
-                            Self::apply_theme_to_ctx(ctx, &self.theme);
-                            self.save_config();
-                            self.toast_manager.success("Theme set to Dark");
-                        }
+                    // Theme toggle on the right
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.menu_button("🎨 Theme", |ui| {
+                            if ui
+                                .radio_value(&mut self.theme, "auto".to_string(), "Auto")
+                                .clicked()
+                            {
+                                Self::apply_theme_to_ctx(ctx, &self.theme);
+                                self.save_config();
+                                self.toast_manager.success("Theme set to Auto");
+                            }
+                            if ui
+                                .radio_value(&mut self.theme, "light".to_string(), "Light")
+                                .clicked()
+                            {
+                                Self::apply_theme_to_ctx(ctx, &self.theme);
+                                self.save_config();
+                                self.toast_manager.success("Theme set to Light");
+                            }
+                            if ui
+                                .radio_value(&mut self.theme, "dark".to_string(), "Dark")
+                                .clicked()
+                            {
+                                Self::apply_theme_to_ctx(ctx, &self.theme);
+                                self.save_config();
+                                self.toast_manager.success("Theme set to Dark");
+                            }
+                        });
                     });
                 });
+                ui.add_space(Theme::SPACING_SM);
             });
-            ui.add_space(4.0);
-        });
-
-        // Calculate panel widths
-        let available_width = ctx.available_rect().width();
-        let left_width = available_width * self.split_pos;
 
         // Left panel with directory tree and controls
         egui::SidePanel::left("left_panel")
-            .default_width(left_width)
-            .width_range(200.0..=available_width - 200.0)
+            .default_width(Theme::SIDEBAR_DEFAULT_WIDTH)
+            .width_range(Theme::SIDEBAR_MIN_WIDTH..=Theme::SIDEBAR_MAX_WIDTH)
             .resizable(true)
             .show(ctx, |ui| {
+                ui.add_space(Theme::SPACING_MD);
                 ui.vertical(|ui| {
-                    ui.label("Files & Directories");
-                    ui.separator();
+                    ui.label(egui::RichText::new("Files & Directories").heading());
+                    ui.add_space(Theme::SPACING_MD);
 
                     // Format selection
                     ui.horizontal(|ui| {
@@ -580,13 +580,18 @@ impl eframe::App for FsPromptApp {
                             .on_hover_text("e.g., .*, node_modules, __pycache__, target, _*");
                     });
 
-                    ui.separator();
+                    ui.add_space(Theme::SPACING_MD);
 
-                    // Search bar
+                    // Search bar with modern styling
                     ui.horizontal(|ui| {
                         ui.label("🔍");
+                        ui.spacing_mut().text_edit_width = ui.available_width() - 60.0;
                         let response = ui
-                            .text_edit_singleline(&mut self.search_query)
+                            .add(
+                                egui::TextEdit::singleline(&mut self.search_query)
+                                    .desired_width(f32::INFINITY)
+                                    .hint_text("Search files..."),
+                            )
                             .on_hover_text("Search for files and folders");
 
                         // Clear button
@@ -600,13 +605,13 @@ impl eframe::App for FsPromptApp {
                         }
                     });
 
-                    ui.separator();
+                    ui.add_space(Theme::SPACING_MD);
 
                     // Show refresh notification if files have changed
                     if self.files_changed {
                         ui.horizontal(|ui| {
                             ui.colored_label(
-                                egui::Color32::from_rgb(255, 152, 0),
+                                Theme::WARNING,
                                 "⚠️ Files have changed since last generation",
                             );
                             if ui.small_button("Refresh").clicked() {
@@ -618,14 +623,18 @@ impl eframe::App for FsPromptApp {
                                 }
                             }
                         });
-                        ui.separator();
+                        ui.add_space(Theme::SPACING_MD);
                     }
 
-                    // Generate button
-                    ui.horizontal(|ui| {
+                    // Generate button - make it prominent
+                    ui.add_space(Theme::SPACING_SM);
+                    ui.horizontal_centered(|ui| {
                         let button_enabled = !self.is_generating && self.selected_path.is_some();
+                        let generate_button = egui::Button::new("🚀 Generate")
+                            .min_size(egui::vec2(120.0, Theme::BUTTON_HEIGHT));
+
                         if ui
-                            .add_enabled(button_enabled, egui::Button::new("🚀 Generate"))
+                            .add_enabled(button_enabled, generate_button)
                             .on_hover_text("Generate output (Ctrl+G)")
                             .clicked()
                         {
@@ -656,15 +665,12 @@ impl eframe::App for FsPromptApp {
                         }
                     });
 
-                    ui.separator();
+                    ui.add_space(Theme::SPACING_MD);
 
                     // Show error message if any
                     if let Some(error) = &self.error_message {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(244, 67, 54),
-                            format!("⚠️ {}", error),
-                        );
-                        ui.separator();
+                        ui.colored_label(Theme::ERROR, format!("⚠️ {}", error));
+                        ui.add_space(Theme::SPACING_MD);
                     }
 
                     // Track selection state before showing tree
@@ -682,29 +688,24 @@ impl eframe::App for FsPromptApp {
 
         // Right panel with output
         egui::CentralPanel::default().show(ctx, |ui| {
+            ui.add_space(Theme::SPACING_MD);
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Output Preview");
+                    ui.label(egui::RichText::new("Output Preview").heading());
 
                     if let Some(token_count) = self.token_count {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let level = token_count.level();
                             let (label, color) = match level {
-                                core::types::TokenLevel::Low => {
-                                    ("Low", egui::Color32::from_rgb(76, 175, 80))
-                                }
-                                core::types::TokenLevel::Medium => {
-                                    ("Medium", egui::Color32::from_rgb(255, 152, 0))
-                                }
-                                core::types::TokenLevel::High => {
-                                    ("High", egui::Color32::from_rgb(244, 67, 54))
-                                }
+                                core::types::TokenLevel::Low => ("Low", Theme::SUCCESS),
+                                core::types::TokenLevel::Medium => ("Medium", Theme::WARNING),
+                                core::types::TokenLevel::High => ("High", Theme::ERROR),
                             };
 
                             ui.colored_label(color, format!("◆ {} tokens", token_count.get()));
                             ui.colored_label(color, format!("[{}]", label));
 
-                            ui.separator();
+                            ui.add_space(Theme::SPACING_MD);
 
                             // Add save button
                             if ui
@@ -795,7 +796,7 @@ impl eframe::App for FsPromptApp {
                             self.output_search_query.clear();
                         }
                     });
-                    ui.separator();
+                    ui.add_space(Theme::SPACING_MD);
                 }
 
                 egui::ScrollArea::vertical()

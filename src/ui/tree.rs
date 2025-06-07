@@ -7,6 +7,8 @@ use glob::Pattern;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use crate::ui::Theme;
+
 /// State for tracking rendering position and viewport culling
 struct RenderState {
     /// Current Y position in the scroll area
@@ -287,7 +289,7 @@ impl DirectoryTree {
             node.children.clear();
             node.children_loaded = false;
             node.load_children_with_patterns(patterns);
-            
+
             // If node was expanded, reload children recursively
             if node.expanded {
                 for child in &mut node.children {
@@ -296,7 +298,7 @@ impl DirectoryTree {
                     }
                 }
             }
-            
+
             // Update selection state based on children
             node.update_parent_selection();
         }
@@ -328,7 +330,7 @@ impl DirectoryTree {
                         current_y: 0.0,
                         viewport_top: viewport.min.y,
                         viewport_bottom: viewport.max.y,
-                        item_height: ui.spacing().interact_size.y,
+                        item_height: Theme::ROW_HEIGHT,
                         items_rendered: 0,
                         items_skipped: 0,
                     };
@@ -498,7 +500,7 @@ impl DirectoryTree {
             return false;
         }
 
-        let indent = depth as f32 * 20.0;
+        let indent = depth as f32 * Theme::INDENT_SIZE;
         let mut any_selection_changed = false;
 
         ui.horizontal(|ui| {
@@ -654,7 +656,7 @@ impl DirectoryTree {
             // Item is visible, render it
             render_state.items_rendered += 1;
 
-            let indent = depth as f32 * 20.0;
+            let indent = depth as f32 * Theme::INDENT_SIZE;
 
             ui.horizontal(|ui| {
                 ui.add_space(indent);
@@ -670,7 +672,7 @@ impl DirectoryTree {
                     }
                 } else {
                     // Spacer for files to align with directories
-                    ui.add_space(ui.spacing().button_padding.x * 2.0 + 16.0);
+                    ui.add_space(ui.spacing().button_padding.x * 2.0 + Theme::ICON_SIZE);
                 }
 
                 // Tri-state checkbox

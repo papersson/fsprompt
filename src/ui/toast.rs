@@ -3,6 +3,8 @@
 use eframe::egui;
 use std::time::{Duration, Instant};
 
+use crate::ui::Theme;
+
 /// Toast notification variants
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastVariant {
@@ -18,9 +20,9 @@ impl ToastVariant {
     /// Gets the color for this variant
     fn color(&self) -> egui::Color32 {
         match self {
-            Self::Success => egui::Color32::from_rgb(76, 175, 80),
-            Self::Warning => egui::Color32::from_rgb(255, 152, 0),
-            Self::Error => egui::Color32::from_rgb(244, 67, 54),
+            Self::Success => Theme::SUCCESS,
+            Self::Warning => Theme::WARNING,
+            Self::Error => Theme::ERROR,
         }
     }
 
@@ -164,7 +166,10 @@ impl ToastManager {
 
             // Position at top-right corner
             egui::Area::new(egui::Id::new("toast_area"))
-                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0))
+                .anchor(
+                    egui::Align2::RIGHT_TOP,
+                    egui::vec2(-Theme::SPACING_MD, Theme::SPACING_MD),
+                )
                 .interactable(false)
                 .show(ctx, |ui| {
                     // Container with shadow
@@ -174,10 +179,10 @@ impl ToastManager {
                             offset: [0, 2],
                             blur: 8,
                             spread: 0,
-                            color: egui::Color32::from_black_alpha(64),
+                            color: egui::Color32::from_black_alpha(40),
                         })
-                        .corner_radius(egui::CornerRadius::same(8))
-                        .inner_margin(egui::Margin::same(12))
+                        .rounding(Theme::RADIUS_LG)
+                        .inner_margin(Theme::SPACING_MD)
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 // Icon
