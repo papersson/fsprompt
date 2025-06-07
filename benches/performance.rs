@@ -1,8 +1,9 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use fsprompt::core::types::CanonicalPath;
 use fsprompt::utils::parallel_fs::{read_files_parallel, scan_directory_parallel};
 use rayon::prelude::*;
 use std::fs;
+use std::hint::black_box;
 use std::path::PathBuf;
 use tempfile::TempDir;
 

@@ -1,6 +1,7 @@
 //! UI performance benchmarks for tree rendering
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
+use fsprompt::core::types::CanonicalPath;
 use fsprompt::ui::tree::TreeNode;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -13,7 +14,8 @@ fn generate_large_tree(depth: usize, files_per_dir: usize) -> TreeNode {
         max_depth: usize,
         files_per_dir: usize,
     ) -> TreeNode {
-        let mut node = TreeNode::new(path.clone()).expect("Failed to create TreeNode");
+        let canonical = CanonicalPath::new(&path).expect("Failed to create canonical path");
+        let mut node = TreeNode::new(canonical).expect("Failed to create TreeNode");
         node.is_dir = true;
         node.children_loaded = true;
 
@@ -30,7 +32,10 @@ fn generate_large_tree(depth: usize, files_per_dir: usize) -> TreeNode {
             // Add files
             for i in 0..files_per_dir {
                 let file_path = path.join(format!("file{}.rs", i));
-                let mut file_node = TreeNode::new(file_path).expect("Failed to create TreeNode");
+                let file_canonical =
+                    CanonicalPath::new(&file_path).expect("Failed to create canonical path");
+                let mut file_node =
+                    TreeNode::new(file_canonical).expect("Failed to create TreeNode");
                 file_node.name = format!("file{}.rs", i);
                 file_node.is_dir = false;
                 node.children.push(file_node);

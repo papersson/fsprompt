@@ -3,7 +3,6 @@
 //! Redesigned type system for fsPrompt with improved expressiveness and type safety
 
 use std::collections::HashSet;
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -12,30 +11,6 @@ use std::sync::Arc;
 /// A validated, canonical path
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CanonicalPath(PathBuf);
-
-/// A relative path from a root directory
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RelativePath {
-    /// The root this path is relative to
-    pub root: Arc<CanonicalPath>,
-    /// The relative path components
-    pub path: PathBuf,
-}
-
-impl RelativePath {
-    /// Creates a new relative path
-    pub fn new(root: Arc<CanonicalPath>, path: impl AsRef<Path>) -> Self {
-        Self {
-            root,
-            path: path.as_ref().to_path_buf(),
-        }
-    }
-
-    /// Resolves to an absolute path
-    pub fn to_absolute(&self) -> PathBuf {
-        self.root.as_path().join(&self.path)
-    }
-}
 
 impl CanonicalPath {
     /// Creates a new canonical path, resolving symlinks and normalizing
@@ -67,37 +42,50 @@ impl CanonicalPath {
     }
 }
 
+/// Serializable wrapper for CanonicalPath
+///
+/// This type exists to bridge the gap between type safety and persistence.
+/// Use CanonicalPath for runtime operations and SerializableCanonicalPath for config storage.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct SerializableCanonicalPath(PathBuf);
+
+impl SerializableCanonicalPath {
+    /// Create from a canonical path
+    pub fn from_canonical(path: &CanonicalPath) -> Self {
+        Self(path.as_path().to_path_buf())
+    }
+
+    /// Try to convert to a canonical path
+    pub fn to_canonical(&self) -> Result<CanonicalPath, std::io::Error> {
+        CanonicalPath::new(&self.0)
+    }
+}
+
+impl From<&CanonicalPath> for SerializableCanonicalPath {
+    fn from(path: &CanonicalPath) -> Self {
+        SerializableCanonicalPath::from_canonical(path)
+    }
+}
+
+impl TryFrom<SerializableCanonicalPath> for CanonicalPath {
+    type Error = std::io::Error;
+
+    fn try_from(path: SerializableCanonicalPath) -> Result<Self, Self::Error> {
+        path.to_canonical()
+    }
+}
+
+impl TryFrom<&SerializableCanonicalPath> for CanonicalPath {
+    type Error = std::io::Error;
+
+    fn try_from(path: &SerializableCanonicalPath) -> Result<Self, Self::Error> {
+        path.to_canonical()
+    }
+}
+
 /// Token count with type safety
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TokenCount(usize);
-
-/// A non-empty string that has been validated
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct NonEmptyString(String);
-
-impl NonEmptyString {
-    /// Creates a new non-empty string
-    pub fn new(s: impl Into<String>) -> Result<Self, &'static str> {
-        let s = s.into();
-        if s.trim().is_empty() {
-            Err("String cannot be empty or whitespace")
-        } else {
-            Ok(Self(s))
-        }
-    }
-
-    /// Get the inner string
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for NonEmptyString {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
 
 impl TokenCount {
     /// Creates a new token count
@@ -187,11 +175,12 @@ pub struct FsEntry {
 #[derive(Debug, Clone)]
 pub enum FsEntryType {
     /// Regular file with size
-    File { size: FileSize },
+    File {
+        /// Size of the file
+        size: FileSize,
+    },
     /// Directory
     Directory,
-    /// Symbolic link (not followed)
-    Symlink { target: PathBuf },
 }
 
 impl FsEntry {
@@ -248,76 +237,7 @@ impl SelectionState {
     }
 }
 
-/// Loading state with phantom type for compile-time state tracking
-#[derive(Debug)]
-pub struct LoadingState<S> {
-    _phantom: PhantomData<S>,
-}
-
-/// Marker types for loading states
-pub mod loading {
-    /// Not yet loaded
-    pub struct NotLoaded;
-    /// Currently loading
-    pub struct Loading;
-    /// Successfully loaded
-    pub struct Loaded;
-    /// Failed to load
-    pub struct Failed;
-}
-
-/// UI node that combines filesystem data with UI state
-#[derive(Debug, Clone)]
-pub struct UiNode {
-    /// The filesystem entry
-    pub entry: FsEntry,
-    /// Selection state
-    pub selection: SelectionState,
-    /// Whether this node matches current search
-    pub matches_search: bool,
-    /// Children nodes (for directories)
-    pub children: Vec<UiNode>,
-    /// Loading state for children
-    pub children_loaded: bool,
-}
-
-// ===== Thread Communication Types =====
-
-/// Messages that can be sent to worker threads
-#[derive(Debug, Clone)]
-pub enum WorkerRequest {
-    /// Scan a directory for entries
-    ScanDirectory {
-        /// Directory to scan
-        path: CanonicalPath,
-        /// Include hidden files
-        include_hidden: bool,
-    },
-    /// Generate output from selected files
-    GenerateOutput {
-        /// Root directory
-        root: CanonicalPath,
-        /// Selected paths
-        selections: Arc<HashSet<CanonicalPath>>,
-        /// Output configuration
-        config: OutputConfig,
-    },
-    /// Cancel current operation
-    Cancel,
-}
-
-/// Output generation configuration
-#[derive(Debug, Clone)]
-pub struct OutputConfig {
-    /// Output format
-    pub format: OutputFormat,
-    /// Ignore patterns
-    pub ignore_patterns: Arc<Vec<IgnorePattern>>,
-    /// Include file contents
-    pub include_contents: bool,
-    /// Maximum file size to include
-    pub max_file_size: Option<FileSize>,
-}
+// ===== Pattern Types =====
 
 /// Type of ignore pattern
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,12 +272,31 @@ impl IgnorePattern {
             PatternType::Exact
         };
 
-        // TODO: Implement actual pattern compilation
-        let _pattern_string = pattern.to_string();
-        let compiled = Arc::new(move |_path: &Path| -> bool {
-            // Placeholder implementation
-            false
-        }) as Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+        // Compile the pattern based on its type
+        let compiled = match pattern_type {
+            PatternType::Exact => {
+                let pattern = pattern.to_string();
+                Arc::new(move |path: &Path| -> bool {
+                    path.to_str().map(|p| p.contains(&pattern)).unwrap_or(false)
+                }) as Arc<dyn Fn(&Path) -> bool + Send + Sync>
+            }
+            PatternType::Glob => {
+                let glob_pattern = glob::Pattern::new(pattern)
+                    .map_err(|e| format!("Invalid glob pattern: {}", e))?;
+                Arc::new(move |path: &Path| -> bool {
+                    path.to_str()
+                        .map(|p| glob_pattern.matches(p))
+                        .unwrap_or(false)
+                }) as Arc<dyn Fn(&Path) -> bool + Send + Sync>
+            }
+            PatternType::Regex => {
+                let regex = regex::Regex::new(pattern)
+                    .map_err(|e| format!("Invalid regex pattern: {}", e))?;
+                Arc::new(move |path: &Path| -> bool {
+                    path.to_str().map(|p| regex.is_match(p)).unwrap_or(false)
+                }) as Arc<dyn Fn(&Path) -> bool + Send + Sync>
+            }
+        };
 
         Ok(Self {
             pattern: pattern.to_string(),
@@ -374,88 +313,6 @@ impl std::fmt::Debug for IgnorePattern {
             .field("compiled", &"<compiled>")
             .finish()
     }
-}
-
-/// Worker thread responses
-#[derive(Debug, Clone)]
-pub enum WorkerResponse {
-    /// Directory entries found
-    DirectoryEntries {
-        /// Path that was scanned
-        path: CanonicalPath,
-        /// Found entries
-        entries: Vec<FsEntry>,
-    },
-    /// Progress update
-    Progress(ProgressUpdate),
-    /// Output generated
-    OutputReady {
-        /// Generated content
-        content: Arc<String>,
-        /// Token count
-        tokens: TokenCount,
-        /// Generation time in milliseconds
-        generation_time_ms: u32,
-    },
-    /// Error occurred
-    Error(WorkerError),
-}
-
-/// Worker errors with specific variants
-#[derive(Debug, Clone)]
-pub enum WorkerError {
-    /// I/O error with path context
-    Io { path: PathBuf, error: String },
-    /// Invalid UTF-8 in file
-    InvalidUtf8 { path: PathBuf },
-    /// Pattern compilation failed
-    InvalidPattern { pattern: String, error: String },
-    /// Directory not found
-    NotFound { path: PathBuf },
-    /// Permission denied
-    PermissionDenied { path: PathBuf },
-    /// Operation cancelled
-    Cancelled,
-}
-
-/// Progress update with detailed information
-#[derive(Debug, Clone)]
-pub struct ProgressUpdate {
-    /// Current stage
-    pub stage: ProgressStage,
-    /// Items completed
-    pub completed: usize,
-    /// Total items (if known)
-    pub total: Option<usize>,
-    /// Current item being processed
-    pub current_item: Option<String>,
-}
-
-impl ProgressUpdate {
-    /// Calculate percentage if total is known
-    #[must_use]
-    pub fn percentage(&self) -> Option<f32> {
-        self.total.map(|total| {
-            if total == 0 {
-                100.0
-            } else {
-                (self.completed as f32 / total as f32) * 100.0
-            }
-        })
-    }
-}
-
-/// Progress stages
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProgressStage {
-    /// Discovering files
-    Discovery,
-    /// Reading file contents
-    Reading,
-    /// Building output
-    Formatting,
-    /// Complete
-    Complete,
 }
 
 // ===== Output Types =====
@@ -479,6 +336,358 @@ pub enum FileReadStrategy {
     MemoryMapped,
 }
 
+// ===== Domain-Specific Newtypes =====
+
+/// Represents a duration of time for generation operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GenerationTime(std::time::Duration);
+
+impl GenerationTime {
+    /// Create from a duration
+    pub fn from_duration(duration: std::time::Duration) -> Self {
+        Self(duration)
+    }
+
+    /// Get as milliseconds
+    pub fn as_millis(&self) -> u128 {
+        self.0.as_millis()
+    }
+
+    /// Get the inner duration
+    pub fn as_duration(&self) -> std::time::Duration {
+        self.0
+    }
+}
+
+/// Count of files with type safety
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct FileCount(usize);
+
+impl FileCount {
+    /// Create a new file count
+    pub const fn new(count: usize) -> Self {
+        Self(count)
+    }
+
+    /// Get the raw count
+    pub const fn get(&self) -> usize {
+        self.0
+    }
+
+    /// Increment the count
+    pub fn increment(&mut self) {
+        self.0 += 1;
+    }
+}
+
+/// Progress tracking with type safety
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct ProgressCount {
+    current: usize,
+    total: usize,
+}
+
+impl ProgressCount {
+    /// Create a new progress count
+    pub const fn new(current: usize, total: usize) -> Self {
+        Self { current, total }
+    }
+
+    /// Get the current count
+    pub const fn current(&self) -> usize {
+        self.current
+    }
+
+    /// Get the total count
+    pub const fn total(&self) -> usize {
+        self.total
+    }
+
+    /// Get progress as a percentage (0.0 to 100.0)
+    pub fn percentage(&self) -> f32 {
+        if self.total == 0 {
+            100.0
+        } else {
+            (self.current as f32 / self.total as f32) * 100.0
+        }
+    }
+
+    /// Check if complete
+    pub const fn is_complete(&self) -> bool {
+        self.current >= self.total
+    }
+
+    /// Increment current count
+    pub fn increment(&mut self) {
+        if self.current < self.total {
+            self.current += 1;
+        }
+    }
+}
+
+/// Maximum history size for undo/redo operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct HistorySize(usize);
+
+impl HistorySize {
+    /// Create a new history size
+    pub const fn new(size: usize) -> Self {
+        Self(size)
+    }
+
+    /// Get the raw size
+    pub const fn get(&self) -> usize {
+        self.0
+    }
+
+    /// Default history size
+    pub const fn default() -> Self {
+        Self(20)
+    }
+}
+
+impl Default for HistorySize {
+    fn default() -> Self {
+        Self::default()
+    }
+}
+
+/// Memory size in bytes
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct MemorySize(usize);
+
+impl MemorySize {
+    /// Create from bytes
+    pub const fn from_bytes(bytes: usize) -> Self {
+        Self(bytes)
+    }
+
+    /// Create from megabytes
+    pub const fn from_mb(mb: usize) -> Self {
+        Self(mb * 1024 * 1024)
+    }
+
+    /// Create from kilobytes
+    pub const fn from_kb(kb: usize) -> Self {
+        Self(kb * 1024)
+    }
+
+    /// Get as bytes
+    pub const fn as_bytes(&self) -> usize {
+        self.0
+    }
+
+    /// Get as megabytes (rounded down)
+    pub const fn as_mb(&self) -> usize {
+        self.0 / (1024 * 1024)
+    }
+}
+
+/// Tree traversal depth
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct TreeDepth(usize);
+
+impl TreeDepth {
+    /// Create a new tree depth
+    pub const fn new(depth: usize) -> Self {
+        Self(depth)
+    }
+
+    /// Get the raw depth
+    pub const fn get(&self) -> usize {
+        self.0
+    }
+
+    /// Increment depth (for traversing deeper)
+    pub fn increment(&self) -> Self {
+        Self(self.0 + 1)
+    }
+
+    /// Check if at or beyond a limit
+    pub const fn exceeds(&self, limit: usize) -> bool {
+        self.0 >= limit
+    }
+}
+
+/// Validation error types
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValidationError {
+    /// Font size is out of valid range
+    FontSizeOutOfRange,
+    /// Window ratio is out of valid range
+    RatioOutOfRange,
+    /// String is empty or whitespace only
+    EmptyString,
+}
+
+/// System operation errors
+#[derive(Debug, Clone, PartialEq)]
+pub enum SystemError {
+    /// Time operation failed
+    TimeError(String),
+    /// Mutex was poisoned
+    MutexPoisoned(String),
+}
+
+impl std::fmt::Display for SystemError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TimeError(msg) => write!(f, "Time operation failed: {}", msg),
+            Self::MutexPoisoned(msg) => write!(f, "Mutex poisoned: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for SystemError {}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FontSizeOutOfRange => write!(f, "Font size must be between 8.0 and 24.0"),
+            Self::RatioOutOfRange => write!(f, "Ratio must be between 0.0 and 1.0"),
+            Self::EmptyString => write!(f, "String cannot be empty"),
+        }
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+/// Font size with validation
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FontSize(f32);
+
+impl FontSize {
+    /// Minimum allowed font size
+    pub const MIN: f32 = 8.0;
+    /// Maximum allowed font size
+    pub const MAX: f32 = 24.0;
+
+    /// Create a new font size with validation
+    pub fn new(size: f32) -> Result<Self, ValidationError> {
+        if size >= Self::MIN && size <= Self::MAX {
+            Ok(Self(size))
+        } else {
+            Err(ValidationError::FontSizeOutOfRange)
+        }
+    }
+
+    /// Get the raw size
+    pub const fn get(&self) -> f32 {
+        self.0
+    }
+}
+
+/// Window split ratio with validation
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowRatio(f32);
+
+impl WindowRatio {
+    /// Create a new window ratio with validation
+    pub fn new(ratio: f32) -> Result<Self, ValidationError> {
+        if (0.0..=1.0).contains(&ratio) {
+            Ok(Self(ratio))
+        } else {
+            Err(ValidationError::RatioOutOfRange)
+        }
+    }
+
+    /// Get the raw ratio
+    pub const fn get(&self) -> f32 {
+        self.0
+    }
+}
+
+/// Non-empty string validation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NonEmptyString(String);
+
+impl NonEmptyString {
+    /// Create a new non-empty string
+    pub fn new(s: String) -> Result<Self, ValidationError> {
+        if s.trim().is_empty() {
+            Err(ValidationError::EmptyString)
+        } else {
+            Ok(Self(s))
+        }
+    }
+
+    /// Get the inner string
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Convert to owned String
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+/// Clipboard content with metadata
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardContent {
+    /// The actual content
+    content: String,
+    /// Format of the content
+    format: OutputFormat,
+}
+
+impl ClipboardContent {
+    /// Create new clipboard content
+    pub fn new(content: String, format: OutputFormat) -> Self {
+        Self { content, format }
+    }
+
+    /// Get the content
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// Get the format
+    pub const fn format(&self) -> OutputFormat {
+        self.format
+    }
+
+    /// Convert to owned String
+    pub fn into_string(self) -> String {
+        self.content
+    }
+}
+
+/// Pattern string for ignore patterns (comma-separated)
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PatternString(String);
+
+impl PatternString {
+    /// Create from a string
+    pub fn new(s: String) -> Self {
+        Self(s)
+    }
+
+    /// Create from a slice of patterns
+    pub fn from_patterns(patterns: &[String]) -> Self {
+        Self(patterns.join(","))
+    }
+
+    /// Split into individual patterns
+    pub fn split(&self) -> Vec<String> {
+        self.0
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    /// Get as string
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Check if empty
+    pub fn is_empty(&self) -> bool {
+        self.0.trim().is_empty()
+    }
+}
+
 // ===== Application State =====
 
 /// Main application state with clear separation of concerns
@@ -486,8 +695,6 @@ pub enum FileReadStrategy {
 pub struct AppState {
     /// Current root directory
     pub root: Option<CanonicalPath>,
-    /// UI tree representation
-    pub tree: Option<UiNode>,
     /// Expanded directories
     pub expanded: HashSet<CanonicalPath>,
     /// Selection tracking
@@ -496,29 +703,18 @@ pub struct AppState {
     pub search: SearchState,
     /// Output state
     pub output: OutputState,
-    /// Worker communication
-    pub worker: WorkerState,
     /// Application configuration
     pub config: AppConfig,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        let (tx1, _rx1) = crossbeam::channel::unbounded::<WorkerRequest>();
-        let (_tx2, rx2) = crossbeam::channel::unbounded::<WorkerResponse>();
         Self {
             root: None,
-            tree: None,
             expanded: HashSet::new(),
             selections: SelectionTracker::default(),
             search: SearchState::default(),
             output: OutputState::default(),
-            worker: WorkerState {
-                sender: tx1,
-                receiver: rx2,
-                current_task: None,
-                progress: None,
-            },
             config: AppConfig::default(),
         }
     }
@@ -615,36 +811,6 @@ pub struct OutputState {
     pub generating: bool,
 }
 
-/// Worker thread state
-#[derive(Debug)]
-pub struct WorkerState {
-    /// Channel sender to worker
-    pub sender: crossbeam::channel::Sender<WorkerRequest>,
-    /// Channel receiver from worker
-    pub receiver: crossbeam::channel::Receiver<WorkerResponse>,
-    /// Current task type if running
-    pub current_task: Option<TaskType>,
-    /// Progress tracking
-    pub progress: Option<ProgressUpdate>,
-}
-
-/// Type of task being executed
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskType {
-    /// Scanning directory
-    DirectoryScan,
-    /// Generating output
-    OutputGeneration,
-}
-
-impl WorkerState {
-    /// Check if worker is busy
-    #[must_use]
-    pub const fn is_busy(&self) -> bool {
-        self.current_task.is_some()
-    }
-}
-
 /// Application configuration
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -656,6 +822,84 @@ pub struct AppConfig {
     pub ignore_patterns: Vec<String>,
     /// Performance settings
     pub performance: PerformanceConfig,
+}
+
+/// Builder for AppConfig
+#[derive(Debug, Default)]
+pub struct AppConfigBuilder {
+    window: Option<WindowConfig>,
+    ui: Option<UiConfig>,
+    ignore_patterns: Option<Vec<String>>,
+    performance: Option<PerformanceConfig>,
+}
+
+impl AppConfigBuilder {
+    /// Create a new builder
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set window configuration
+    pub fn window(mut self, window: WindowConfig) -> Self {
+        self.window = Some(window);
+        self
+    }
+
+    /// Set UI configuration
+    pub fn ui(mut self, ui: UiConfig) -> Self {
+        self.ui = Some(ui);
+        self
+    }
+
+    /// Set ignore patterns
+    pub fn ignore_patterns(mut self, patterns: Vec<String>) -> Self {
+        self.ignore_patterns = Some(patterns);
+        self
+    }
+
+    /// Add a single ignore pattern
+    pub fn add_ignore_pattern(mut self, pattern: String) -> Self {
+        self.ignore_patterns
+            .get_or_insert_with(|| {
+                vec![
+                    ".*".to_string(),
+                    "node_modules".to_string(),
+                    "__pycache__".to_string(),
+                    "target".to_string(),
+                    "build".to_string(),
+                    "dist".to_string(),
+                    "_*".to_string(),
+                ]
+            })
+            .push(pattern);
+        self
+    }
+
+    /// Set performance configuration
+    pub fn performance(mut self, perf: PerformanceConfig) -> Self {
+        self.performance = Some(perf);
+        self
+    }
+
+    /// Build the final AppConfig
+    pub fn build(self) -> AppConfig {
+        AppConfig {
+            window: self.window.unwrap_or_default(),
+            ui: self.ui.unwrap_or_default(),
+            ignore_patterns: self.ignore_patterns.unwrap_or_else(|| {
+                vec![
+                    ".*".to_string(),
+                    "node_modules".to_string(),
+                    "__pycache__".to_string(),
+                    "target".to_string(),
+                    "build".to_string(),
+                    "dist".to_string(),
+                    "_*".to_string(),
+                ]
+            }),
+            performance: self.performance.unwrap_or_default(),
+        }
+    }
 }
 
 impl Default for AppConfig {
@@ -686,6 +930,65 @@ pub struct WindowConfig {
     pub height: f32,
     /// Left pane ratio (0.0-1.0)
     pub left_pane_ratio: f32,
+}
+
+/// Builder for WindowConfig
+#[derive(Debug)]
+pub struct WindowConfigBuilder {
+    width: Option<f32>,
+    height: Option<f32>,
+    left_pane_ratio: Option<f32>,
+}
+
+impl Default for WindowConfigBuilder {
+    fn default() -> Self {
+        Self {
+            width: None,
+            height: None,
+            left_pane_ratio: None,
+        }
+    }
+}
+
+impl WindowConfigBuilder {
+    /// Create a new builder
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set window dimensions
+    pub fn dimensions(mut self, width: f32, height: f32) -> Self {
+        self.width = Some(width);
+        self.height = Some(height);
+        self
+    }
+
+    /// Set window width
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// Set window height
+    pub fn height(mut self, height: f32) -> Self {
+        self.height = Some(height);
+        self
+    }
+
+    /// Set left pane ratio
+    pub fn left_pane_ratio(mut self, ratio: f32) -> Self {
+        self.left_pane_ratio = Some(ratio.clamp(0.0, 1.0));
+        self
+    }
+
+    /// Build the final WindowConfig
+    pub fn build(self) -> WindowConfig {
+        WindowConfig {
+            width: self.width.unwrap_or(1200.0),
+            height: self.height.unwrap_or(800.0),
+            left_pane_ratio: self.left_pane_ratio.unwrap_or(0.3),
+        }
+    }
 }
 
 impl Default for WindowConfig {
@@ -775,11 +1078,18 @@ pub enum ToastVariant {
     Warning(String),
     /// Error with optional details
     Error {
+        /// Error message
         message: String,
+        /// Optional error details
         details: Option<String>,
     },
     /// Progress notification
-    Progress { message: String, percentage: f32 },
+    Progress {
+        /// Progress message
+        message: String,
+        /// Progress percentage (0-100)
+        percentage: f32,
+    },
 }
 
 impl Toast {
@@ -829,29 +1139,43 @@ mod tests {
     }
 
     #[test]
-    fn test_progress_percentage() {
-        let progress = ProgressUpdate {
-            stage: ProgressStage::Reading,
-            completed: 50,
-            total: Some(100),
-            current_item: None,
-        };
-        assert_eq!(progress.percentage(), Some(50.0));
-
-        let unknown = ProgressUpdate {
-            stage: ProgressStage::Discovery,
-            completed: 10,
-            total: None,
-            current_item: None,
-        };
-        assert_eq!(unknown.percentage(), None);
-    }
-
-    #[test]
     fn test_selection_tracker() {
         let tracker = SelectionTracker::default();
         assert!(tracker.selected.is_empty());
 
         // Would add more tests here for checkpoint/undo/redo
+    }
+
+    #[test]
+    fn test_app_config_builder() {
+        let config = AppConfigBuilder::new()
+            .add_ignore_pattern("*.log".to_string())
+            .add_ignore_pattern("tmp/".to_string())
+            .build();
+
+        assert!(config.ignore_patterns.contains(&"*.log".to_string()));
+        assert!(config.ignore_patterns.contains(&"tmp/".to_string()));
+        assert!(config.ignore_patterns.contains(&"node_modules".to_string())); // default
+    }
+
+    #[test]
+    fn test_window_config_builder() {
+        let window = WindowConfigBuilder::new()
+            .dimensions(1920.0, 1080.0)
+            .left_pane_ratio(0.4)
+            .build();
+
+        assert_eq!(window.width, 1920.0);
+        assert_eq!(window.height, 1080.0);
+        assert_eq!(window.left_pane_ratio, 0.4);
+    }
+
+    #[test]
+    fn test_window_config_builder_clamps_ratio() {
+        let window = WindowConfigBuilder::new()
+            .left_pane_ratio(1.5) // Out of range
+            .build();
+
+        assert_eq!(window.left_pane_ratio, 1.0); // Clamped to max
     }
 }

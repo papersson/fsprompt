@@ -1,7 +1,9 @@
 //! Undo/Redo history management for fsPrompt
 
+use crate::core::types::HistorySize;
 use std::collections::HashSet;
 
+/// Snapshot of the selection state for undo/redo
 #[derive(Debug, Clone)]
 pub struct SelectionSnapshot {
     /// Set of selected file paths
@@ -10,6 +12,7 @@ pub struct SelectionSnapshot {
     pub expanded_dirs: HashSet<String>,
 }
 
+/// Manages undo/redo history for file selections
 #[derive(Debug)]
 pub struct HistoryManager {
     /// Past states (for undo)
@@ -17,11 +20,12 @@ pub struct HistoryManager {
     /// Future states (for redo)
     future: Vec<SelectionSnapshot>,
     /// Maximum history depth
-    max_depth: usize,
+    max_depth: HistorySize,
 }
 
 impl HistoryManager {
-    pub fn new(max_depth: usize) -> Self {
+    /// Creates a new history manager with specified maximum depth
+    pub fn new(max_depth: HistorySize) -> Self {
         Self {
             past: Vec::new(),
             future: Vec::new(),
@@ -38,7 +42,7 @@ impl HistoryManager {
         self.past.push(snapshot);
 
         // Trim if exceeds max depth
-        if self.past.len() > self.max_depth {
+        if self.past.len() > self.max_depth.get() {
             self.past.remove(0);
         }
     }
@@ -50,7 +54,7 @@ impl HistoryManager {
             self.future.push(current);
 
             // Trim future if needed
-            if self.future.len() > self.max_depth {
+            if self.future.len() > self.max_depth.get() {
                 self.future.remove(0);
             }
 
@@ -67,7 +71,7 @@ impl HistoryManager {
             self.past.push(current);
 
             // Trim past if needed
-            if self.past.len() > self.max_depth {
+            if self.past.len() > self.max_depth.get() {
                 self.past.remove(0);
             }
 

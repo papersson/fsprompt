@@ -154,11 +154,10 @@ impl ToastManager {
         // Update state first
         self.update();
 
-        if self.current_toast.is_some() {
+        if let Some(toast) = &self.current_toast {
             let mut should_close = false;
 
             // Clone values we need in the closure
-            let toast = self.current_toast.as_ref().unwrap();
             let variant_color = toast.variant.color();
             let variant_icon = toast.variant.icon();
             let message = toast.message.clone();

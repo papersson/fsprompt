@@ -1,13 +1,14 @@
 use super::{ProgressStage, WorkerCommand, WorkerEvent};
-use crate::core::types::{CanonicalPath, OutputFormat, TokenCount};
+use crate::core::types::{CanonicalPath, OutputFormat, PatternString, ProgressCount, TokenCount};
 use crossbeam::channel::{Receiver, Sender};
 use glob::Pattern;
 use rayon::prelude::*;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
+/// Main worker thread function for output generation
 pub fn run_worker(cmd_rx: Receiver<WorkerCommand>, event_tx: Sender<WorkerEvent>) {
     let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -44,15 +45,14 @@ fn generate_output(
     selected_files: Vec<CanonicalPath>,
     format: OutputFormat,
     include_tree: bool,
-    ignore_patterns: String,
+    ignore_patterns: PatternString,
     event_tx: Sender<WorkerEvent>,
     cancelled: Arc<AtomicBool>,
 ) {
     // Send initial progress
     let _ = event_tx.send(WorkerEvent::Progress {
         stage: ProgressStage::ScanningFiles,
-        current: 0,
-        total: selected_files.len(),
+        progress: ProgressCount::new(0, selected_files.len()),
     });
 
     // Read file contents in parallel
@@ -72,8 +72,7 @@ fn generate_output(
             let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
             let _ = event_tx.send(WorkerEvent::Progress {
                 stage: ProgressStage::ReadingFiles,
-                current,
-                total: total_files,
+                progress: ProgressCount::new(current, total_files),
             });
 
             (path.clone(), result)
@@ -88,18 +87,13 @@ fn generate_output(
     // Build output
     let _ = event_tx.send(WorkerEvent::Progress {
         stage: ProgressStage::BuildingOutput,
-        current: 0,
-        total: 1,
+        progress: ProgressCount::new(0, 1),
     });
 
     // Generate directory tree with ignore patterns
     let tree_string = if include_tree {
         // Parse ignore patterns
-        let patterns: Vec<String> = ignore_patterns
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let patterns = ignore_patterns.split();
 
         generate_filtered_tree_string(root_path.as_path(), &patterns)
     } else {
@@ -143,8 +137,8 @@ fn generate_output(
                         output.push_str("]]>\n");
                         output.push_str("    </file>\n");
                     }
-                    Err(_) => {
-                        failed_files.push(path_str.to_string());
+                    Err(e) => {
+                        failed_files.push(format!("{}: {}", path_str, e));
                     }
                 }
             }
@@ -219,8 +213,8 @@ fn generate_output(
                         }
                         output.push_str("```\n\n");
                     }
-                    Err(_) => {
-                        failed_files.push(path_str.to_string());
+                    Err(e) => {
+                        failed_files.push(format!("{}: {}", path_str, e));
                     }
                 }
             }
@@ -241,8 +235,7 @@ fn generate_output(
 
     let _ = event_tx.send(WorkerEvent::Progress {
         stage: ProgressStage::BuildingOutput,
-        current: 1,
-        total: 1,
+        progress: ProgressCount::new(1, 1),
     });
 
     if !cancelled.load(Ordering::Relaxed) {

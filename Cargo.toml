@@ -1,7 +1,7 @@
 [package]
 name = "fsprompt"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 authors = ["fsPrompt Contributors"]
 description = "A high-performance filesystem prompt generator for LLMs"
 license = "MIT"
@@ -36,7 +36,6 @@ tracing = "0.1.41"
 
 [dev-dependencies]
 criterion = { version = "0.6.0", features = ["html_reports"] }
-num_cpus = "1.17.0"
 tempfile = "3.20.0"
 walkdir = "2.5.0"
 

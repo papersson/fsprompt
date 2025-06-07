@@ -1,7 +1,7 @@
 //! Performance measurement utilities
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Frame time tracker for UI performance
@@ -31,7 +31,7 @@ impl FrameTimer {
         // Use a stable epoch for timing
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_else(|_| std::time::Duration::ZERO)
             .as_micros() as u64;
 
         let last = self.last_frame.swap(now, Ordering::Relaxed);
@@ -75,12 +75,18 @@ impl FrameTimer {
     }
 }
 
+/// Frame timing statistics
 #[derive(Debug, Default)]
 pub struct FrameStats {
+    /// Average frames per second
     pub avg_fps: f64,
+    /// 50th percentile frame time in milliseconds
     pub p50_ms: f64,
+    /// 95th percentile frame time in milliseconds
     pub p95_ms: f64,
+    /// 99th percentile frame time in milliseconds
     pub p99_ms: f64,
+    /// Maximum frame time in milliseconds
     pub max_ms: f64,
 }
 
@@ -108,6 +114,16 @@ impl<'a> ScopedTimer<'a> {
             start: Instant::now(),
             budget: Some(budget),
         }
+    }
+}
+
+impl<'a> std::fmt::Debug for ScopedTimer<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScopedTimer")
+            .field("name", &self.name)
+            .field("elapsed", &self.start.elapsed())
+            .field("budget", &self.budget)
+            .finish()
     }
 }
 

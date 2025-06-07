@@ -1,5 +1,7 @@
 //! User interface components for fsPrompt
 
+pub mod app_ui;
+/// Theme and styling constants
 pub mod theme;
 pub mod toast;
 pub mod tree;

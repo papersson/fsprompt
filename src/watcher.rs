@@ -3,13 +3,15 @@
 use crate::core::types::CanonicalPath;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Result, Watcher};
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 /// Events from the filesystem watcher
 #[derive(Debug, Clone)]
 pub enum WatcherEvent {
     /// Files have changed in the watched directory
+    /// Note: These paths come from filesystem events and may not be canonical
+    /// or even exist (in case of deletions). They're used for notification only.
     Changed(Vec<PathBuf>),
     /// An error occurred while watching
     Error(String),

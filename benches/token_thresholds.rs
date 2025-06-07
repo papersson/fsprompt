@@ -1,8 +1,7 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use fsprompt::core::types::CanonicalPath;
 use fsprompt::utils::parallel_fs::{read_files_parallel, scan_directory_parallel};
 use std::fs;
-use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Create a realistic project structure for benchmarking

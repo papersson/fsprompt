@@ -14,9 +14,12 @@
 //!
 //! This library provides the core functionality for generating context prompts from codebases.
 
+pub mod app;
 pub mod core;
+pub mod handlers;
 pub mod state;
 pub mod ui;
 pub mod utils;
 pub mod watcher;
+/// Worker thread management for background tasks
 pub mod workers;

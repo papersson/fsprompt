@@ -1,30 +1,13 @@
 //! Directory tree UI component with lazy loading and tri-state selection
 
 use eframe::egui;
-use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use glob::Pattern;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 
 use crate::core::types::{CanonicalPath, FileSize};
 use crate::ui::Theme;
-
-/// State for tracking rendering position and viewport culling
-struct RenderState {
-    /// Current Y position in the scroll area
-    current_y: f32,
-    /// Top of the visible viewport
-    viewport_top: f32,
-    /// Bottom of the visible viewport
-    viewport_bottom: f32,
-    /// Height of each tree item
-    item_height: f32,
-    /// Number of items actually rendered
-    items_rendered: usize,
-    /// Number of items skipped due to viewport culling
-    items_skipped: usize,
-}
 
 // Using SelectionState from core::types
 pub use crate::core::types::SelectionState;
@@ -51,13 +34,8 @@ pub struct TreeNode {
 }
 
 impl TreeNode {
-    /// Creates a new tree node from a PathBuf
-    pub fn new(path: PathBuf) -> std::io::Result<Self> {
-        Self::from_canonical(CanonicalPath::new(path)?)
-    }
-
     /// Creates a new tree node from a CanonicalPath
-    pub fn from_canonical(canonical_path: CanonicalPath) -> std::io::Result<Self> {
+    pub fn new(canonical_path: CanonicalPath) -> std::io::Result<Self> {
         let name = canonical_path.file_name().map_or_else(
             || canonical_path.as_path().to_string_lossy().to_string(),
             |n| n.to_string_lossy().to_string(),
@@ -115,7 +93,9 @@ impl TreeNode {
                         }
                     }
 
-                    TreeNode::new(path).ok()
+                    CanonicalPath::new(path)
+                        .ok()
+                        .and_then(|cp| TreeNode::new(cp).ok())
                 })
                 .collect();
 
@@ -244,6 +224,23 @@ impl TreeNode {
     }
 }
 
+/// A flattened view of a tree node for efficient rendering
+#[derive(Debug, Clone)]
+struct FlattenedNode {
+    /// Reference to the actual node (using index path)
+    node_path: Vec<usize>,
+    /// Depth in the tree (for indentation)
+    depth: usize,
+    /// Display name
+    name: String,
+    /// Whether this is a directory
+    is_dir: bool,
+    /// Whether the node is expanded
+    is_expanded: bool,
+    /// Selection state
+    selection: SelectionState,
+}
+
 /// Directory tree widget
 #[derive(Debug)]
 pub struct DirectoryTree {
@@ -253,6 +250,10 @@ pub struct DirectoryTree {
     node_map: HashMap<CanonicalPath, usize>,
     /// Ignore patterns to filter files/directories
     ignore_patterns: Vec<Pattern>,
+    /// Flattened view of visible nodes (cached)
+    flattened_nodes: Vec<FlattenedNode>,
+    /// Whether the flattened view needs rebuilding
+    needs_flattening: bool,
 }
 
 impl DirectoryTree {
@@ -263,22 +264,18 @@ impl DirectoryTree {
             roots: Vec::new(),
             node_map: HashMap::new(),
             ignore_patterns: Vec::new(),
+            flattened_nodes: Vec::new(),
+            needs_flattening: true,
         }
     }
 
     /// Sets the root directory for the tree
-    pub fn set_root(&mut self, path: PathBuf) {
-        if let Ok(canonical_path) = CanonicalPath::new(path) {
-            self.set_root_canonical(canonical_path);
-        }
-    }
-
-    /// Sets the root directory for the tree using a CanonicalPath
-    pub fn set_root_canonical(&mut self, path: CanonicalPath) {
+    pub fn set_root(&mut self, path: CanonicalPath) {
         self.roots.clear();
         self.node_map.clear();
+        self.needs_flattening = true;
 
-        if let Ok(mut root) = TreeNode::from_canonical(path) {
+        if let Ok(mut root) = TreeNode::new(path) {
             root.expanded = true;
             root.load_children_with_patterns(&self.ignore_patterns);
 
@@ -298,6 +295,7 @@ impl DirectoryTree {
         // Reload all expanded directories with new patterns
         if !self.roots.is_empty() {
             Self::reload_with_patterns(&mut self.roots[0], &self.ignore_patterns);
+            self.needs_flattening = true;
         }
     }
 
@@ -328,53 +326,229 @@ impl DirectoryTree {
         self.show_with_search(ui, "");
     }
 
+    /// Flattens the tree into a linear list of visible nodes
+    fn flatten_tree(&mut self, search_query: &str) {
+        self.flattened_nodes.clear();
+
+        if self.roots.is_empty() {
+            return;
+        }
+
+        let matcher = if search_query.is_empty() {
+            None
+        } else {
+            Some(SkimMatcherV2::default())
+        };
+
+        // Flatten the tree recursively
+        Self::flatten_node_recursive(
+            &self.roots[0],
+            &mut self.flattened_nodes,
+            vec![0],
+            0,
+            search_query,
+            matcher.as_ref(),
+        );
+
+        self.needs_flattening = false;
+    }
+
+    /// Recursively flattens a node and its visible children
+    fn flatten_node_recursive(
+        node: &TreeNode,
+        flattened: &mut Vec<FlattenedNode>,
+        node_path: Vec<usize>,
+        depth: usize,
+        search_query: &str,
+        matcher: Option<&SkimMatcherV2>,
+    ) {
+        // Check if this node matches the search
+        let should_show = if let Some(matcher) = matcher {
+            let node_matches = matcher.fuzzy_match(&node.name, search_query).is_some();
+            let children_match = if node.is_dir {
+                Self::has_matching_child(node, search_query, matcher)
+            } else {
+                false
+            };
+            node_matches || children_match
+        } else {
+            true
+        };
+
+        if !should_show {
+            return;
+        }
+
+        // Add this node to the flattened list
+        flattened.push(FlattenedNode {
+            node_path: node_path.clone(),
+            depth,
+            name: node.name.clone(),
+            is_dir: node.is_dir,
+            is_expanded: node.expanded,
+            selection: node.selection,
+        });
+
+        // If expanded, add children
+        if node.is_dir && node.expanded && node.children_loaded {
+            for (i, child) in node.children.iter().enumerate() {
+                let mut child_path = node_path.clone();
+                child_path.push(i);
+                Self::flatten_node_recursive(
+                    child,
+                    flattened,
+                    child_path,
+                    depth + 1,
+                    search_query,
+                    matcher,
+                );
+            }
+        }
+    }
+
+    /// Gets a mutable reference to a node by its path
+    fn get_node_by_path_mut(&mut self, path: &[usize]) -> Option<&mut TreeNode> {
+        if path.is_empty() || self.roots.is_empty() {
+            return None;
+        }
+
+        let mut current = &mut self.roots[0];
+
+        for &index in &path[1..] {
+            if index >= current.children.len() {
+                return None;
+            }
+            current = &mut current.children[index];
+        }
+
+        Some(current)
+    }
+
     /// Renders the tree UI with search filtering
     pub fn show_with_search(&mut self, ui: &mut egui::Ui, search_query: &str) {
-        // Clone patterns to avoid borrowing issues
-        let patterns = self.ignore_patterns.clone();
+        // Rebuild flattened view if needed
+        if self.needs_flattening || !search_query.is_empty() {
+            self.flatten_tree(search_query);
+        }
+
+        let total_rows = self.flattened_nodes.len();
+        if total_rows == 0 {
+            ui.label("No files to display");
+            return;
+        }
+
+        // Use egui's built-in row virtualization for uniform height items
+        let row_height = Theme::ROW_HEIGHT;
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show_viewport(ui, |ui, viewport| {
-                // We need to handle the recursive rendering carefully
-                // to avoid mutable borrow issues
-                if !self.roots.is_empty() {
-                    let matcher = if search_query.is_empty() {
-                        None
-                    } else {
-                        Some(SkimMatcherV2::default())
-                    };
+            .show_rows(ui, row_height, total_rows, |ui, row_range| {
+                let patterns = self.ignore_patterns.clone();
+                let mut any_selection_changed = false;
+                let mut any_expansion_changed = false;
 
-                    // Track current y position for viewport culling
-                    let mut render_state = RenderState {
-                        current_y: 0.0,
-                        viewport_top: viewport.min.y,
-                        viewport_bottom: viewport.max.y,
-                        item_height: Theme::ROW_HEIGHT,
-                        items_rendered: 0,
-                        items_skipped: 0,
-                    };
-
-                    let selection_changed = Self::show_nodes_with_search_culled(
-                        ui,
-                        &mut self.roots[0],
-                        0,
-                        search_query,
-                        matcher.as_ref(),
-                        &mut render_state,
-                        &patterns,
-                    );
-
-                    // If any selection changed, update parent states
-                    if selection_changed {
-                        Self::update_parent_states_recursive(&mut self.roots[0]);
+                for row in row_range {
+                    if row >= self.flattened_nodes.len() {
+                        break;
                     }
 
-                    // Debug: log render stats
-                    #[cfg(debug_assertions)]
-                    if render_state.items_rendered > 0 || render_state.items_skipped > 0 {
-                        ui.ctx()
-                            .request_repaint_after(std::time::Duration::from_secs(1));
-                    }
+                    let flat_node = self.flattened_nodes[row].clone();
+                    let indent = flat_node.depth as f32 * Theme::INDENT_SIZE;
+
+                    ui.horizontal(|ui| {
+                        ui.add_space(indent);
+
+                        // Expansion toggle for directories
+                        if flat_node.is_dir {
+                            let arrow = if flat_node.is_expanded { "▼" } else { "▶" };
+                            if ui.small_button(arrow).clicked() {
+                                if let Some(node) = self.get_node_by_path_mut(&flat_node.node_path)
+                                {
+                                    node.expanded = !node.expanded;
+                                    if node.expanded && !node.children_loaded {
+                                        node.load_children_with_patterns(&patterns);
+                                    }
+                                    any_expansion_changed = true;
+                                }
+                            }
+                        } else {
+                            // Spacer for files
+                            ui.add_space(ui.spacing().button_padding.x * 2.0 + Theme::ICON_SIZE);
+                        }
+
+                        // Tri-state checkbox
+                        let _selection_changed = match flat_node.selection {
+                            SelectionState::Unchecked => {
+                                if ui.checkbox(&mut false, "").clicked() {
+                                    if let Some(node) =
+                                        self.get_node_by_path_mut(&flat_node.node_path)
+                                    {
+                                        node.set_selection_with_patterns(
+                                            SelectionState::Checked,
+                                            &patterns,
+                                        );
+                                        any_selection_changed = true;
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                            SelectionState::Checked => {
+                                if ui.checkbox(&mut true, "").clicked() {
+                                    if let Some(node) =
+                                        self.get_node_by_path_mut(&flat_node.node_path)
+                                    {
+                                        node.set_selection_with_patterns(
+                                            SelectionState::Unchecked,
+                                            &patterns,
+                                        );
+                                        any_selection_changed = true;
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                            SelectionState::Indeterminate => {
+                                if ui.checkbox(&mut true, "").clicked() {
+                                    if let Some(node) =
+                                        self.get_node_by_path_mut(&flat_node.node_path)
+                                    {
+                                        node.set_selection_with_patterns(
+                                            SelectionState::Checked,
+                                            &patterns,
+                                        );
+                                        any_selection_changed = true;
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            }
+                        };
+
+                        // Icon and name
+                        let icon = if flat_node.is_dir { "📁" } else { "📄" };
+                        ui.label(format!("{} {}", icon, flat_node.name));
+                    });
+                }
+
+                // Update parent states if selections changed
+                if any_selection_changed && !self.roots.is_empty() {
+                    Self::update_parent_states_recursive(&mut self.roots[0]);
+                    self.needs_flattening = true;
+                }
+
+                // Mark for re-flattening if expansions changed
+                if any_expansion_changed {
+                    self.needs_flattening = true;
                 }
             });
     }
@@ -472,135 +646,6 @@ impl DirectoryTree {
         }
     }
 
-    /// Renders nodes recursively
-    fn show_nodes(
-        ui: &mut egui::Ui,
-        node: &mut TreeNode,
-        depth: usize,
-        patterns: &[Pattern],
-    ) -> bool {
-        Self::show_nodes_with_search(ui, node, depth, "", None, patterns)
-    }
-
-    /// Renders nodes recursively with search filtering
-    fn show_nodes_with_search(
-        ui: &mut egui::Ui,
-        node: &mut TreeNode,
-        depth: usize,
-        search_query: &str,
-        matcher: Option<&SkimMatcherV2>,
-        patterns: &[Pattern],
-    ) -> bool {
-        // Safety: prevent stack overflow on extremely deep directories
-        const MAX_DEPTH: usize = 50;
-        if depth > MAX_DEPTH {
-            ui.label("⚠️ Directory too deep to display");
-            return false;
-        }
-
-        // Check if this node matches the search
-        let should_show = if let Some(matcher) = matcher {
-            // Check if the node name matches
-            let node_matches = matcher.fuzzy_match(&node.name, search_query).is_some();
-
-            // For directories, also check if any child matches
-            let children_match = if node.is_dir {
-                Self::has_matching_child(node, search_query, matcher)
-            } else {
-                false
-            };
-
-            node_matches || children_match
-        } else {
-            true // No search, show everything
-        };
-
-        if !should_show {
-            return false;
-        }
-
-        let indent = depth as f32 * Theme::INDENT_SIZE;
-        let mut any_selection_changed = false;
-
-        ui.horizontal(|ui| {
-            ui.add_space(indent);
-
-            // Expansion toggle for directories
-            if node.is_dir {
-                let arrow = if node.expanded { "▼" } else { "▶" };
-                if ui.small_button(arrow).clicked() {
-                    node.expanded = !node.expanded;
-                    if node.expanded && !node.children_loaded {
-                        node.load_children_with_patterns(patterns);
-                    }
-                }
-            } else {
-                // Spacer for files to align with directories
-                ui.add_space(ui.spacing().button_padding.x * 2.0 + 16.0);
-            }
-
-            // Tri-state checkbox
-            let selection_changed = match node.selection {
-                SelectionState::Unchecked => {
-                    if ui.checkbox(&mut false, "").clicked() {
-                        node.set_selection_with_patterns(SelectionState::Checked, patterns);
-                        true
-                    } else {
-                        false
-                    }
-                }
-                SelectionState::Checked => {
-                    if ui.checkbox(&mut true, "").clicked() {
-                        node.set_selection_with_patterns(SelectionState::Unchecked, patterns);
-                        true
-                    } else {
-                        false
-                    }
-                }
-                SelectionState::Indeterminate => {
-                    // Show as partially checked
-                    if ui.checkbox(&mut true, "").clicked() {
-                        node.set_selection_with_patterns(SelectionState::Checked, patterns);
-                        true
-                    } else {
-                        false
-                    }
-                }
-            };
-
-            if selection_changed {
-                any_selection_changed = true;
-            }
-
-            // Icon and name
-            let icon = if node.is_dir { "📁" } else { "📄" };
-            ui.label(format!("{} {}", icon, node.name));
-        });
-
-        // Show children if expanded
-        if node.is_dir && node.expanded {
-            // Auto-expand when searching to show matching children
-            if matcher.is_some() && !node.children_loaded {
-                node.load_children_with_patterns(patterns);
-            }
-
-            for child in &mut node.children {
-                if Self::show_nodes_with_search(
-                    ui,
-                    child,
-                    depth + 1,
-                    search_query,
-                    matcher,
-                    patterns,
-                ) {
-                    any_selection_changed = true;
-                }
-            }
-        }
-
-        any_selection_changed
-    }
-
     /// Checks if a node has any children that match the search query
     fn has_matching_child(node: &TreeNode, search_query: &str, matcher: &SkimMatcherV2) -> bool {
         // If children aren't loaded yet, we can't check
@@ -621,148 +666,6 @@ impl DirectoryTree {
         }
 
         false
-    }
-
-    /// Renders nodes recursively with search filtering and viewport culling
-    fn show_nodes_with_search_culled(
-        ui: &mut egui::Ui,
-        node: &mut TreeNode,
-        depth: usize,
-        search_query: &str,
-        matcher: Option<&SkimMatcherV2>,
-        render_state: &mut RenderState,
-        patterns: &[Pattern],
-    ) -> bool {
-        // Safety: prevent stack overflow on extremely deep directories
-        const MAX_DEPTH: usize = 50;
-        if depth > MAX_DEPTH {
-            ui.label("⚠️ Directory too deep to display");
-            return false;
-        }
-
-        // Check if this node matches the search
-        let should_show = if let Some(matcher) = matcher {
-            // Check if the node name matches
-            let node_matches = matcher.fuzzy_match(&node.name, search_query).is_some();
-
-            // For directories, also check if any child matches
-            let children_match = if node.is_dir {
-                Self::has_matching_child(node, search_query, matcher)
-            } else {
-                false
-            };
-
-            node_matches || children_match
-        } else {
-            true // No search, show everything
-        };
-
-        if !should_show {
-            return false;
-        }
-
-        // Calculate item position
-        let item_top = render_state.current_y;
-        let item_bottom = item_top + render_state.item_height;
-
-        // Check if item is within viewport
-        let is_visible =
-            item_bottom >= render_state.viewport_top && item_top <= render_state.viewport_bottom;
-
-        let mut any_selection_changed = false;
-
-        if is_visible {
-            // Item is visible, render it
-            render_state.items_rendered += 1;
-
-            let indent = depth as f32 * Theme::INDENT_SIZE;
-
-            ui.horizontal(|ui| {
-                ui.add_space(indent);
-
-                // Expansion toggle for directories
-                if node.is_dir {
-                    let arrow = if node.expanded { "▼" } else { "▶" };
-                    if ui.small_button(arrow).clicked() {
-                        node.expanded = !node.expanded;
-                        if node.expanded && !node.children_loaded {
-                            node.load_children_with_patterns(patterns);
-                        }
-                    }
-                } else {
-                    // Spacer for files to align with directories
-                    ui.add_space(ui.spacing().button_padding.x * 2.0 + Theme::ICON_SIZE);
-                }
-
-                // Tri-state checkbox
-                let selection_changed = match node.selection {
-                    SelectionState::Unchecked => {
-                        if ui.checkbox(&mut false, "").clicked() {
-                            node.set_selection_with_patterns(SelectionState::Checked, patterns);
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    SelectionState::Checked => {
-                        if ui.checkbox(&mut true, "").clicked() {
-                            node.set_selection_with_patterns(SelectionState::Unchecked, patterns);
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    SelectionState::Indeterminate => {
-                        // Show as partially checked
-                        if ui.checkbox(&mut true, "").clicked() {
-                            node.set_selection_with_patterns(SelectionState::Checked, patterns);
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                };
-
-                if selection_changed {
-                    any_selection_changed = true;
-                }
-
-                // Icon and name
-                let icon = if node.is_dir { "📁" } else { "📄" };
-                ui.label(format!("{} {}", icon, node.name));
-            });
-        } else {
-            // Item is not visible, skip rendering but allocate space
-            render_state.items_skipped += 1;
-            ui.allocate_space(egui::vec2(ui.available_width(), render_state.item_height));
-        }
-
-        // Update Y position
-        render_state.current_y += render_state.item_height;
-
-        // Show children if expanded
-        if node.is_dir && node.expanded {
-            // Auto-expand when searching to show matching children
-            if matcher.is_some() && !node.children_loaded {
-                node.load_children_with_patterns(patterns);
-            }
-
-            for child in &mut node.children {
-                if Self::show_nodes_with_search_culled(
-                    ui,
-                    child,
-                    depth + 1,
-                    search_query,
-                    matcher,
-                    render_state,
-                    patterns,
-                ) {
-                    any_selection_changed = true;
-                }
-            }
-        }
-
-        any_selection_changed
     }
 
     /// Gets all selected file paths as a set
@@ -797,6 +700,8 @@ impl DirectoryTree {
         for root in &mut self.roots {
             Self::update_parent_states_recursive(root);
         }
+
+        self.needs_flattening = true;
     }
 
     /// Collects selected file paths recursively

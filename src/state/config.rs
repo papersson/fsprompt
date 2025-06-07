@@ -3,10 +3,12 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Application configuration for persistence
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Window dimensions
     pub window_width: f32,
+    /// Window height in pixels
     pub window_height: f32,
 
     /// Split position (0.0 to 1.0)
@@ -43,12 +45,14 @@ impl Default for AppConfig {
     }
 }
 
+/// Manages loading and saving of application configuration
 #[derive(Debug)]
 pub struct ConfigManager {
     config_path: PathBuf,
 }
 
 impl ConfigManager {
+    /// Creates a new config manager with platform-specific config path
     pub fn new() -> Self {
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -62,6 +66,7 @@ impl ConfigManager {
         }
     }
 
+    /// Load configuration from disk, returns default if not found or invalid
     pub fn load(&self) -> AppConfig {
         match std::fs::read_to_string(&self.config_path) {
             Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
@@ -69,6 +74,7 @@ impl ConfigManager {
         }
     }
 
+    /// Save configuration to disk
     pub fn save(&self, config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
         let json = serde_json::to_string_pretty(config)?;
         std::fs::write(&self.config_path, json)?;

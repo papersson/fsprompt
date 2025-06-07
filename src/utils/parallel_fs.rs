@@ -1,7 +1,7 @@
 //! Parallel filesystem operations for improved performance
 
 use crate::core::types::CanonicalPath;
-use ignore::{WalkBuilder, WalkState, overrides::OverrideBuilder};
+use ignore::{overrides::OverrideBuilder, WalkBuilder, WalkState};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
@@ -75,15 +75,20 @@ pub fn scan_directory_parallel(
                         parent,
                     };
 
-                    entries.lock().expect("mutex poisoned").push(dir_entry);
+                    if let Ok(mut entries) = entries.lock() {
+                        entries.push(dir_entry);
+                    }
                 }
             }
             WalkState::Continue
         })
     });
 
-    let entries = entries.lock().expect("mutex poisoned");
-    entries.clone()
+    let result = match entries.lock() {
+        Ok(entries) => entries.clone(),
+        Err(_) => Vec::new(), // Return empty vector if mutex is poisoned
+    };
+    result
 }
 
 /// Builds a hierarchical tree structure from flat entries
@@ -127,10 +132,14 @@ pub fn read_files_parallel(
                     read_file_mmap(path.as_path())
                 } else {
                     // Use standard reading for small files
-                    std::fs::read_to_string(path.as_path()).map_err(|e| e.to_string())
+                    std::fs::read_to_string(path.as_path())
+                        .map_err(|e| format!("Failed to read file: {}", e))
                 }
             } else {
-                Err("Failed to get file metadata".to_string())
+                Err(format!(
+                    "Failed to get metadata for {}: file may not exist or be inaccessible",
+                    path.as_path().display()
+                ))
             };
 
             (path.clone(), result)
@@ -143,8 +152,10 @@ fn read_file_mmap(path: &Path) -> Result<String, String> {
     use memmap2::Mmap;
     use std::fs::File;
 
-    let file = File::open(path).map_err(|e| e.to_string())?;
-    let mmap = unsafe { Mmap::map(&file) }.map_err(|e| e.to_string())?;
+    let file =
+        File::open(path).map_err(|e| format!("Failed to open file for memory mapping: {}", e))?;
+    let mmap =
+        unsafe { Mmap::map(&file) }.map_err(|e| format!("Failed to create memory map: {}", e))?;
 
     // Convert to string, handling UTF-8 errors
     String::from_utf8(mmap.to_vec()).map_err(|e| format!("UTF-8 error: {}", e))
@@ -201,6 +212,15 @@ impl PatternCache {
         }
 
         false
+    }
+}
+
+impl std::fmt::Debug for PatternCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PatternCache")
+            .field("globs", &format!("{} patterns", self.globs.len()))
+            .field("regexes", &format!("{} patterns", self.regexes.len()))
+            .finish()
     }
 }
 
