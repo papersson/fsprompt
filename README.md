@@ -1,4 +1,4 @@
-# fsPrompt (Codext)
+# fsPrompt
 
 A high-performance desktop application that generates compact "context prompts" from local codebases for use with Large Language Models (LLMs). Convert filesystem structures and file contents into XML or Markdown format.
 
@@ -111,8 +111,8 @@ src/
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/codext-rs.git
-cd codext-rs
+git clone https://github.com/yourusername/fsprompt.git
+cd fsprompt
 
 # Build release version
 cargo build --release
