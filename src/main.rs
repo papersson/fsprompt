@@ -85,6 +85,8 @@ struct FsPromptApp {
     history_manager: HistoryManager,
     /// Toast notification manager
     toast_manager: ToastManager,
+    /// Current theme
+    theme: String,
 }
 
 impl FsPromptApp {
@@ -94,9 +96,9 @@ impl FsPromptApp {
         let config_manager = ConfigManager::new();
         let config = config_manager.load();
 
-        // Apply saved window size
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
-        // Note: Window size is set via NativeOptions in main()
+        // Apply theme based on config
+        let theme = config.theme.clone();
+        Self::apply_theme(cc, &theme);
 
         let output_format = match config.output_format.as_str() {
             "markdown" => OutputFormat::Markdown,
@@ -128,7 +130,48 @@ impl FsPromptApp {
             config_manager,
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
+            theme,
         }
+    }
+
+    /// Apply theme to the UI at creation time
+    fn apply_theme(cc: &eframe::CreationContext<'_>, theme: &str) {
+        Self::apply_theme_to_ctx(&cc.egui_ctx, theme);
+    }
+
+    /// Apply theme to context
+    fn apply_theme_to_ctx(ctx: &egui::Context, theme: &str) {
+        let visuals = match theme {
+            "dark" => egui::Visuals::dark(),
+            "light" => egui::Visuals::light(),
+            "auto" | _ => {
+                // Auto-detect system theme
+                if Self::prefers_dark_theme() {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                }
+            }
+        };
+        ctx.set_visuals(visuals);
+    }
+
+    /// Detect system theme preference
+    fn prefers_dark_theme() -> bool {
+        // On macOS, we can check the system appearance
+        #[cfg(target_os = "macos")]
+        {
+            use std::process::Command;
+            if let Ok(output) = Command::new("defaults")
+                .args(["read", "-g", "AppleInterfaceStyle"])
+                .output()
+            {
+                return String::from_utf8_lossy(&output.stdout).trim() == "Dark";
+            }
+        }
+
+        // Default to dark theme if we can't detect
+        true
     }
 
     /// Generates output from selected files
@@ -305,6 +348,7 @@ impl FsPromptApp {
                 OutputFormat::Xml => "xml".to_string(),
                 OutputFormat::Markdown => "markdown".to_string(),
             },
+            theme: self.theme.clone(),
         };
 
         let _ = self.config_manager.save(&config);
@@ -414,6 +458,36 @@ impl eframe::App for FsPromptApp {
                 if let Some(path) = &self.selected_path {
                     ui.label(format!("Selected: {}", path.display()));
                 }
+
+                // Theme toggle on the right
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button("🎨 Theme", |ui| {
+                        if ui
+                            .radio_value(&mut self.theme, "auto".to_string(), "Auto")
+                            .clicked()
+                        {
+                            Self::apply_theme_to_ctx(ctx, &self.theme);
+                            self.save_config();
+                            self.toast_manager.success("Theme set to Auto");
+                        }
+                        if ui
+                            .radio_value(&mut self.theme, "light".to_string(), "Light")
+                            .clicked()
+                        {
+                            Self::apply_theme_to_ctx(ctx, &self.theme);
+                            self.save_config();
+                            self.toast_manager.success("Theme set to Light");
+                        }
+                        if ui
+                            .radio_value(&mut self.theme, "dark".to_string(), "Dark")
+                            .clicked()
+                        {
+                            Self::apply_theme_to_ctx(ctx, &self.theme);
+                            self.save_config();
+                            self.toast_manager.success("Theme set to Dark");
+                        }
+                    });
+                });
             });
             ui.add_space(4.0);
         });
@@ -705,6 +779,7 @@ mod tests {
             config_manager: ConfigManager::new(),
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
+            theme: "auto".to_string(),
         };
 
         assert!(app.selected_path.is_none());
@@ -736,6 +811,7 @@ mod tests {
             config_manager: ConfigManager::new(),
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
+            theme: "auto".to_string(),
         };
 
         assert_eq!(app.selected_path, Some(test_path));
@@ -764,6 +840,7 @@ mod tests {
             config_manager: ConfigManager::new(),
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
+            theme: "auto".to_string(),
         };
 
         // Test that Debug is implemented correctly

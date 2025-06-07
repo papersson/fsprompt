@@ -23,6 +23,9 @@ pub struct AppConfig {
 
     /// Last used output format
     pub output_format: String,
+
+    /// Theme preference: "auto", "light", "dark"
+    pub theme: String,
 }
 
 impl Default for AppConfig {
@@ -35,6 +38,7 @@ impl Default for AppConfig {
             ignore_patterns: String::new(),
             include_tree: true,
             output_format: "xml".to_string(),
+            theme: "auto".to_string(),
         }
     }
 }
