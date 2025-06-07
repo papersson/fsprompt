@@ -1,10 +1,10 @@
 use super::{ProgressStage, WorkerCommand, WorkerEvent};
-use crate::ui::OutputFormat;
+use crate::core::types::{CanonicalPath, OutputFormat, TokenCount};
 use crossbeam::channel::{Receiver, Sender};
 use glob::Pattern;
 use rayon::prelude::*;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -40,8 +40,8 @@ pub fn run_worker(cmd_rx: Receiver<WorkerCommand>, event_tx: Sender<WorkerEvent>
 }
 
 fn generate_output(
-    root_path: PathBuf,
-    selected_files: Vec<PathBuf>,
+    root_path: CanonicalPath,
+    selected_files: Vec<CanonicalPath>,
     format: OutputFormat,
     include_tree: bool,
     ignore_patterns: String,
@@ -59,15 +59,15 @@ fn generate_output(
     let processed = Arc::new(AtomicUsize::new(0));
     let total_files = selected_files.len();
 
-    let file_contents: Vec<(PathBuf, Result<String, String>)> = selected_files
+    let file_contents: Vec<(CanonicalPath, Result<String, String>)> = selected_files
         .par_iter()
         .map(|path| {
             if cancelled.load(Ordering::Relaxed) {
                 return (path.clone(), Err("Cancelled".to_string()));
             }
 
-            let result =
-                fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e));
+            let result = fs::read_to_string(path.as_path())
+                .map_err(|e| format!("Failed to read file: {}", e));
 
             let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
             let _ = event_tx.send(WorkerEvent::Progress {
@@ -101,7 +101,7 @@ fn generate_output(
             .filter(|s| !s.is_empty())
             .collect();
 
-        generate_filtered_tree_string(&root_path, &patterns)
+        generate_filtered_tree_string(root_path.as_path(), &patterns)
     } else {
         String::new()
     };
@@ -126,7 +126,10 @@ fn generate_output(
             output.push_str("  <files>\n");
 
             for (path, content_result) in &file_contents {
-                let relative_path = path.strip_prefix(&root_path).unwrap_or(path);
+                let relative_path = path
+                    .as_path()
+                    .strip_prefix(root_path.as_path())
+                    .unwrap_or(path.as_path());
                 let path_str = relative_path.to_string_lossy();
 
                 match content_result {
@@ -162,14 +165,21 @@ fn generate_output(
             output.push_str("## Files\n\n");
 
             for (path, content_result) in &file_contents {
-                let relative_path = path.strip_prefix(&root_path).unwrap_or(path);
+                let relative_path = path
+                    .as_path()
+                    .strip_prefix(root_path.as_path())
+                    .unwrap_or(path.as_path());
                 let path_str = relative_path.to_string_lossy();
 
                 match content_result {
                     Ok(content) => {
                         output.push_str(&format!("### {}\n\n", path_str));
 
-                        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+                        let extension = path
+                            .as_path()
+                            .extension()
+                            .and_then(|ext| ext.to_str())
+                            .unwrap_or("");
 
                         let lang = match extension {
                             "rs" => "rust",
@@ -227,7 +237,7 @@ fn generate_output(
     }
 
     // Calculate token count
-    let token_count = output.chars().count() / 4;
+    let token_count = TokenCount::from_chars(output.chars().count());
 
     let _ = event_tx.send(WorkerEvent::Progress {
         stage: ProgressStage::BuildingOutput,

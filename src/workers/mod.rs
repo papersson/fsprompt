@@ -1,14 +1,14 @@
+use crate::core::types::{CanonicalPath, OutputFormat, TokenCount};
 use crossbeam::channel::{Receiver, Sender};
-use std::path::PathBuf;
 
 pub mod generator;
 
 #[derive(Debug, Clone)]
 pub enum WorkerCommand {
     GenerateOutput {
-        root_path: PathBuf,
-        selected_files: Vec<PathBuf>,
-        format: crate::ui::OutputFormat,
+        root_path: CanonicalPath,
+        selected_files: Vec<CanonicalPath>,
+        format: OutputFormat,
         include_tree: bool,
         ignore_patterns: String,
     },
@@ -24,7 +24,7 @@ pub enum WorkerEvent {
     },
     OutputReady {
         content: String,
-        token_count: usize,
+        token_count: TokenCount,
     },
     Error(String),
     Cancelled,

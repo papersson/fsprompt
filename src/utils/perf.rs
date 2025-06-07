@@ -179,6 +179,7 @@ impl MemoryTracker {
             let mut info: libc::mach_task_basic_info = mem::zeroed();
             let mut count = mem::size_of::<libc::mach_task_basic_info>() as u32;
 
+            #[allow(deprecated)]
             let result = libc::task_info(
                 libc::mach_task_self(),
                 libc::MACH_TASK_BASIC_INFO,

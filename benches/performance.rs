@@ -1,4 +1,5 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use fsprompt::core::types::CanonicalPath;
 use fsprompt::utils::parallel_fs::{read_files_parallel, scan_directory_parallel};
 use rayon::prelude::*;
 use std::fs;
@@ -113,7 +114,11 @@ fn bench_file_reading(c: &mut Criterion) {
 
     c.bench_function("file_reading_optimized", |b| {
         b.iter(|| {
-            let results = read_files_parallel(&file_paths, 256 * 1024); // 256KB threshold
+            let canonical_paths: Vec<CanonicalPath> = file_paths
+                .iter()
+                .filter_map(|p| CanonicalPath::new(p).ok())
+                .collect();
+            let results = read_files_parallel(&canonical_paths, 256 * 1024); // 256KB threshold
             let total_size: usize = results
                 .iter()
                 .filter_map(|(_, result)| result.as_ref().ok())

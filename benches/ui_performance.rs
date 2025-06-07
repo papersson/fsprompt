@@ -13,7 +13,7 @@ fn generate_large_tree(depth: usize, files_per_dir: usize) -> TreeNode {
         max_depth: usize,
         files_per_dir: usize,
     ) -> TreeNode {
-        let mut node = TreeNode::new(path.clone());
+        let mut node = TreeNode::new(path.clone()).expect("Failed to create TreeNode");
         node.is_dir = true;
         node.children_loaded = true;
 
@@ -30,7 +30,7 @@ fn generate_large_tree(depth: usize, files_per_dir: usize) -> TreeNode {
             // Add files
             for i in 0..files_per_dir {
                 let file_path = path.join(format!("file{}.rs", i));
-                let mut file_node = TreeNode::new(file_path);
+                let mut file_node = TreeNode::new(file_path).expect("Failed to create TreeNode");
                 file_node.name = format!("file{}.rs", i);
                 file_node.is_dir = false;
                 node.children.push(file_node);
@@ -40,7 +40,12 @@ fn generate_large_tree(depth: usize, files_per_dir: usize) -> TreeNode {
         node
     }
 
-    generate_subtree(PathBuf::from("/benchmark"), 0, depth, files_per_dir)
+    generate_subtree(
+        std::env::temp_dir().join("benchmark"),
+        0,
+        depth,
+        files_per_dir,
+    )
 }
 
 /// Count total nodes in tree

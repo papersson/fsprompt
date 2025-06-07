@@ -181,7 +181,7 @@ impl ToastManager {
                             spread: 0,
                             color: egui::Color32::from_black_alpha(40),
                         })
-                        .rounding(Theme::RADIUS_LG)
+                        .corner_radius(Theme::RADIUS_LG)
                         .inner_margin(Theme::SPACING_MD)
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {

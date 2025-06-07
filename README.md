@@ -7,21 +7,29 @@ A high-performance desktop application that generates compact "context prompts" 
 ### ✅ Currently Implemented
 - 🗂️ **Native folder picker** - Select directories using your system's file dialog
 - 🌳 **Interactive directory tree** - Browse files with expand/collapse functionality  
-- ☑️ **File selection** - Select individual files to include in output
+- ☑️ **Tri-state checkboxes** - Full parent/child selection propagation with indeterminate states
 - 📐 **Split-pane interface** - Resizable 30/70 layout for controls and output
 - 🚀 **Lazy loading** - Directories load content only when expanded
 - 📄 **XML/Markdown generation** - Create LLM-ready context prompts in two formats
 - 📊 **Token estimation** - See token count with Low/Medium/High visual indicators
 - 🎯 **Real-time preview** - View generated output immediately
-- ⚡ **Fast file reading** - Handles multiple files efficiently
-
-### 🚧 Coming Soon
-- ☑️ **Tri-state checkboxes** - Full parent/child selection propagation
 - ⚡ **Parallel processing** - Handle large codebases with worker threads
 - 🔍 **Search & filtering** - Find files quickly with fuzzy search
 - 🚫 **Ignore patterns** - Skip node_modules, .git, and custom patterns
-- 📋 **Clipboard integration** - Copy output directly to clipboard
-- 💾 **Save to file** - Export generated output
+- 📋 **Clipboard integration** - Copy output directly to clipboard (Ctrl+C)
+- 💾 **Save to file** - Export generated output (Ctrl+S)
+- 🌲 **Directory tree in output** - Include full codebase structure for LLM context
+- ↩️ **Undo/Redo** - Selection history with Ctrl+Z/Ctrl+Shift+Z
+- 🎨 **Dark/Light themes** - Auto-detect system theme with manual override
+- 🔔 **Toast notifications** - Success/error feedback for user actions
+- 📁 **File watching** - Auto-refresh prompts when files change
+- 📈 **Performance overlay** - Real-time FPS and memory monitoring (Ctrl+Shift+P)
+
+### 🚧 Planned Features
+- 🎯 **Drag-and-drop** - Drag files/folders to include
+- ♿ **Accessibility** - Full keyboard navigation and screen reader support
+- 🌍 **Internationalization** - Support for multiple languages
+- 📦 **Installers** - Native installers for Windows, macOS, and Linux
 
 ## Quick Start
 
@@ -105,13 +113,13 @@ src/
 
 - **Operating Systems**: Windows 10+, macOS 12+, Linux (glibc 2.31+)
 - **Memory**: 512MB minimum, 1GB recommended
-- **Rust**: 1.70+ (for development)
+- **Rust**: 1.86+ (for development)
 
 ## Building from Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/fsprompt.git
+git clone https://github.com/patrikpersson/codext-rs.git
 cd fsprompt
 
 # Build release version

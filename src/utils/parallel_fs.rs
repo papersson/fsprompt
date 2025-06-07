@@ -1,22 +1,23 @@
 //! Parallel filesystem operations for improved performance
 
+use crate::core::types::CanonicalPath;
 use ignore::{WalkBuilder, WalkState, overrides::OverrideBuilder};
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 /// Result of a parallel directory scan
 #[derive(Debug, Clone)]
 pub struct DirectoryEntry {
-    /// The full path to the entry
-    pub path: PathBuf,
+    /// The full canonical path to the entry
+    pub path: CanonicalPath,
     /// Whether this is a directory
     pub is_dir: bool,
     /// The file/directory name
     pub name: String,
     /// Parent directory path (if any)
-    pub parent: Option<PathBuf>,
+    pub parent: Option<CanonicalPath>,
 }
 
 /// Performs a parallel directory scan up to a specified depth
@@ -61,33 +62,35 @@ pub fn scan_directory_parallel(
         let entries = Arc::clone(&entries_clone);
         Box::new(move |result| {
             if let Ok(entry) = result {
-                let path = entry.path().to_path_buf();
-                let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let parent = path.parent().map(|p| p.to_path_buf());
+                let path_buf = entry.path().to_path_buf();
+                if let Ok(canonical_path) = CanonicalPath::new(&path_buf) {
+                    let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    let parent = path_buf.parent().and_then(|p| CanonicalPath::new(p).ok());
 
-                let dir_entry = DirectoryEntry {
-                    path,
-                    is_dir,
-                    name,
-                    parent,
-                };
+                    let dir_entry = DirectoryEntry {
+                        path: canonical_path,
+                        is_dir,
+                        name,
+                        parent,
+                    };
 
-                entries.lock().unwrap().push(dir_entry);
+                    entries.lock().expect("mutex poisoned").push(dir_entry);
+                }
             }
             WalkState::Continue
         })
     });
 
-    let entries = entries.lock().unwrap();
+    let entries = entries.lock().expect("mutex poisoned");
     entries.clone()
 }
 
 /// Builds a hierarchical tree structure from flat entries
 pub fn build_tree_from_entries(
     entries: Vec<DirectoryEntry>,
-) -> HashMap<PathBuf, Vec<DirectoryEntry>> {
-    let mut tree: HashMap<PathBuf, Vec<DirectoryEntry>> = HashMap::new();
+) -> HashMap<CanonicalPath, Vec<DirectoryEntry>> {
+    let mut tree: HashMap<CanonicalPath, Vec<DirectoryEntry>> = HashMap::new();
 
     // Group entries by parent
     for entry in entries {
@@ -112,19 +115,19 @@ pub fn build_tree_from_entries(
 
 /// Parallel file reading with memory mapping for large files
 pub fn read_files_parallel(
-    file_paths: &[PathBuf],
+    file_paths: &[CanonicalPath],
     use_mmap_threshold: usize,
-) -> Vec<(PathBuf, Result<String, String>)> {
+) -> Vec<(CanonicalPath, Result<String, String>)> {
     file_paths
         .par_iter()
         .map(|path| {
-            let result = if let Ok(metadata) = std::fs::metadata(path) {
+            let result = if let Ok(metadata) = std::fs::metadata(path.as_path()) {
                 if metadata.len() as usize > use_mmap_threshold {
                     // Use memory-mapped reading for large files
-                    read_file_mmap(path)
+                    read_file_mmap(path.as_path())
                 } else {
                     // Use standard reading for small files
-                    std::fs::read_to_string(path).map_err(|e| e.to_string())
+                    std::fs::read_to_string(path.as_path()).map_err(|e| e.to_string())
                 }
             } else {
                 Err("Failed to get file metadata".to_string())
@@ -223,7 +226,9 @@ mod tests {
         assert!(entries.len() >= 4); // root + 2 dirs + 2 files
 
         let tree = build_tree_from_entries(entries);
-        assert!(tree.contains_key(root));
+        // Check if any entry has root as parent
+        let root_canonical = CanonicalPath::new(root).unwrap();
+        assert!(tree.contains_key(&root_canonical));
     }
 
     #[test]

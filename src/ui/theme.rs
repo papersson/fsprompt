@@ -82,7 +82,8 @@ impl Theme {
         // Configure spacing
         style.spacing.item_spacing = egui::vec2(Self::SPACING_SM, Self::SPACING_SM);
         style.spacing.button_padding = egui::vec2(Self::BUTTON_PADDING_H, Self::BUTTON_PADDING_V);
-        style.spacing.menu_margin = egui::Margin::symmetric(Self::SPACING_SM as i8, Self::SPACING_SM as i8);
+        style.spacing.menu_margin =
+            egui::Margin::symmetric(Self::SPACING_SM as i8, Self::SPACING_SM as i8);
         style.spacing.indent = Self::INDENT_SIZE;
 
         // Configure visuals

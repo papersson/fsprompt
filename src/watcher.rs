@@ -1,5 +1,6 @@
 //! Filesystem watcher for auto-refresh functionality
 
+use crate::core::types::CanonicalPath;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Result, Watcher};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -44,7 +45,7 @@ impl FsWatcher {
     }
 
     /// Start watching a directory
-    pub fn watch(&mut self, path: &PathBuf) -> Result<()> {
+    pub fn watch(&mut self, path: &CanonicalPath) -> Result<()> {
         // Stop any existing watcher
         self.stop();
 
@@ -67,7 +68,7 @@ impl FsWatcher {
         })?;
 
         // Start watching the path recursively
-        watcher.watch(path, RecursiveMode::Recursive)?;
+        watcher.watch(path.as_path(), RecursiveMode::Recursive)?;
 
         self.watcher = Some(watcher);
         self.last_event = None;

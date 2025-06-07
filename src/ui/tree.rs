@@ -7,6 +7,7 @@ use glob::Pattern;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use crate::core::types::{CanonicalPath, FileSize};
 use crate::ui::Theme;
 
 /// State for tracking rendering position and viewport culling
@@ -25,22 +26,14 @@ struct RenderState {
     items_skipped: usize,
 }
 
-/// Selection state for tree items
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectionState {
-    /// Not selected
-    Unchecked,
-    /// Partially selected (some children selected)
-    Indeterminate,
-    /// Fully selected
-    Checked,
-}
+// Using SelectionState from core::types
+pub use crate::core::types::SelectionState;
 
 /// A node in the directory tree
 #[derive(Debug)]
 pub struct TreeNode {
-    /// Path to the file or directory
-    pub path: PathBuf,
+    /// Canonical path to the file or directory
+    pub canonical_path: CanonicalPath,
     /// Display name (file/folder name)
     pub name: String,
     /// Whether this is a directory
@@ -53,28 +46,46 @@ pub struct TreeNode {
     pub children_loaded: bool,
     /// Child nodes (lazy loaded)
     pub children: Vec<TreeNode>,
+    /// File size if this is a file
+    pub file_size: Option<FileSize>,
 }
 
 impl TreeNode {
-    /// Creates a new tree node
-    #[must_use]
-    pub fn new(path: PathBuf) -> Self {
-        let name = path.file_name().map_or_else(
-            || path.to_string_lossy().to_string(),
+    /// Creates a new tree node from a PathBuf
+    pub fn new(path: PathBuf) -> std::io::Result<Self> {
+        Self::from_canonical(CanonicalPath::new(path)?)
+    }
+
+    /// Creates a new tree node from a CanonicalPath
+    pub fn from_canonical(canonical_path: CanonicalPath) -> std::io::Result<Self> {
+        let name = canonical_path.file_name().map_or_else(
+            || canonical_path.as_path().to_string_lossy().to_string(),
             |n| n.to_string_lossy().to_string(),
         );
 
-        let is_dir = path.is_dir();
+        let is_dir = canonical_path.as_path().is_dir();
 
-        Self {
-            path,
+        // Get file size if it's a file
+        let file_size = if !is_dir {
+            canonical_path
+                .as_path()
+                .metadata()
+                .ok()
+                .map(|m| FileSize::from_bytes(m.len()))
+        } else {
+            None
+        };
+
+        Ok(Self {
+            canonical_path,
             name,
             is_dir,
             selection: SelectionState::Unchecked,
             expanded: false,
             children_loaded: false,
             children: Vec::new(),
-        }
+            file_size,
+        })
     }
 
     /// Loads children for this node if it's a directory
@@ -90,7 +101,7 @@ impl TreeNode {
 
         self.children_loaded = true;
 
-        if let Ok(entries) = std::fs::read_dir(&self.path) {
+        if let Ok(entries) = std::fs::read_dir(self.canonical_path.as_path()) {
             let mut children: Vec<TreeNode> = entries
                 .filter_map(Result::ok)
                 .filter_map(|entry| {
@@ -104,7 +115,7 @@ impl TreeNode {
                         }
                     }
 
-                    Some(TreeNode::new(path))
+                    TreeNode::new(path).ok()
                 })
                 .collect();
 
@@ -213,7 +224,7 @@ impl TreeNode {
             if self.is_dir { "DIR" } else { "FILE" },
             self.name,
             self.selection,
-            self.path.display()
+            self.canonical_path.as_path().display()
         );
 
         if self.is_dir {
@@ -239,7 +250,7 @@ pub struct DirectoryTree {
     /// Root nodes of the tree
     pub roots: Vec<TreeNode>,
     /// Map of path to node for quick lookups
-    node_map: HashMap<PathBuf, usize>,
+    node_map: HashMap<CanonicalPath, usize>,
     /// Ignore patterns to filter files/directories
     ignore_patterns: Vec<Pattern>,
 }
@@ -257,14 +268,22 @@ impl DirectoryTree {
 
     /// Sets the root directory for the tree
     pub fn set_root(&mut self, path: PathBuf) {
+        if let Ok(canonical_path) = CanonicalPath::new(path) {
+            self.set_root_canonical(canonical_path);
+        }
+    }
+
+    /// Sets the root directory for the tree using a CanonicalPath
+    pub fn set_root_canonical(&mut self, path: CanonicalPath) {
         self.roots.clear();
         self.node_map.clear();
 
-        let mut root = TreeNode::new(path);
-        root.expanded = true;
-        root.load_children_with_patterns(&self.ignore_patterns);
+        if let Ok(mut root) = TreeNode::from_canonical(path) {
+            root.expanded = true;
+            root.load_children_with_patterns(&self.ignore_patterns);
 
-        self.roots.push(root);
+            self.roots.push(root);
+        }
     }
 
     /// Updates the ignore patterns from a comma-separated string
@@ -378,7 +397,7 @@ impl DirectoryTree {
     }
 
     /// Collects all selected file paths recursively
-    pub fn collect_selected_files(&self) -> Vec<PathBuf> {
+    pub fn collect_selected_files(&self) -> Vec<CanonicalPath> {
         let mut selected = Vec::new();
         for root in &self.roots {
             Self::collect_selected_from_node(root, &mut selected);
@@ -426,7 +445,7 @@ impl DirectoryTree {
     }
 
     /// Helper function to collect selected files from a node recursively
-    fn collect_selected_from_node(node: &TreeNode, selected: &mut Vec<PathBuf>) {
+    fn collect_selected_from_node(node: &TreeNode, selected: &mut Vec<CanonicalPath>) {
         match node.selection {
             SelectionState::Checked => {
                 if node.is_dir {
@@ -436,7 +455,7 @@ impl DirectoryTree {
                     }
                 } else {
                     // For files, add to the selected list
-                    selected.push(node.path.clone());
+                    selected.push(node.canonical_path.clone());
                 }
             }
             SelectionState::Indeterminate => {
@@ -783,7 +802,7 @@ impl DirectoryTree {
     /// Collects selected file paths recursively
     fn collect_selected_paths_recursive(node: &TreeNode, selected: &mut HashSet<String>) {
         if node.selection == SelectionState::Checked && !node.is_dir {
-            selected.insert(node.path.to_string_lossy().to_string());
+            selected.insert(node.canonical_path.as_path().to_string_lossy().to_string());
         }
 
         for child in &node.children {
@@ -794,7 +813,7 @@ impl DirectoryTree {
     /// Collects expanded directory paths recursively
     fn collect_expanded_paths_recursive(node: &TreeNode, expanded: &mut HashSet<String>) {
         if node.is_dir && node.expanded {
-            expanded.insert(node.path.to_string_lossy().to_string());
+            expanded.insert(node.canonical_path.as_path().to_string_lossy().to_string());
         }
 
         for child in &node.children {
@@ -808,7 +827,7 @@ impl DirectoryTree {
         selected_files: &HashSet<String>,
         expanded_dirs: &HashSet<String>,
     ) {
-        let path_str = node.path.to_string_lossy().to_string();
+        let path_str = node.canonical_path.as_path().to_string_lossy().to_string();
 
         // Restore expansion state
         if node.is_dir && expanded_dirs.contains(&path_str) {

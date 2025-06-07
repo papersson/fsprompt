@@ -24,9 +24,10 @@ pub mod utils;
 pub mod watcher;
 pub mod workers;
 
-use core::types::{OutputFormat, TokenCount};
-use state::{AppConfig, ConfigManager, HistoryManager, SelectionSnapshot};
-use ui::{Theme, toast::ToastManager};
+use core::types::*;
+use state::{ConfigManager, HistoryManager};
+use ui::Theme as UiTheme;
+use ui::toast::ToastManager;
 use utils::perf::PerfOverlay;
 use watcher::FsWatcher;
 use workers::{WorkerCommand, WorkerEvent, WorkerHandle};
@@ -49,48 +50,22 @@ fn main() -> eframe::Result<()> {
 /// The main application struct that holds all state
 #[derive(Debug)]
 struct FsPromptApp {
-    /// The currently selected directory path
-    selected_path: Option<std::path::PathBuf>,
-    /// Directory tree widget
+    /// Core application state
+    state: AppState,
+    /// Directory tree widget (temporary until fully migrated)
     tree: ui::tree::DirectoryTree,
-    /// Split position (percentage of left panel width)
-    split_pos: f32,
-    /// Generated output content
-    output_content: String,
-    /// Whether we're currently generating output
-    is_generating: bool,
-    /// Current output format
-    output_format: OutputFormat,
-    /// Estimated token count
-    token_count: Option<TokenCount>,
-    /// Worker thread handle
+    /// Worker thread handle (temporary until fully migrated)
     worker: WorkerHandle,
-    /// Current progress stage
+    /// Current progress stage (temporary)
     current_progress: Option<(workers::ProgressStage, usize, usize)>,
-    /// Error message to display
+    /// Error message to display (temporary)
     error_message: Option<String>,
-    /// Whether to include directory tree in output
-    include_tree: bool,
-    /// Ignore patterns input
-    ignore_patterns: String,
-    /// Search query for filtering the tree
-    search_query: String,
-    /// Output search state
-    output_search_active: bool,
-    /// Output search query
-    output_search_query: String,
-    /// Current search match index
-    output_search_match_index: usize,
-    /// Total number of search matches
-    output_search_match_count: usize,
     /// Configuration manager
     config_manager: ConfigManager,
     /// History manager for undo/redo
     history_manager: HistoryManager,
     /// Toast notification manager
     toast_manager: ToastManager,
-    /// Current theme
-    theme: String,
     /// Filesystem watcher
     fs_watcher: FsWatcher,
     /// Whether files have changed since last generation
@@ -104,43 +79,60 @@ impl FsPromptApp {
     #[must_use]
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let config_manager = ConfigManager::new();
-        let config = config_manager.load();
+        let old_config = config_manager.load();
 
-        // Apply theme based on config
-        let theme = config.theme.clone();
-        Self::apply_theme(cc, &theme);
+        // Create AppState from old config
+        let mut state = AppState::default();
 
-        let output_format = match config.output_format.as_str() {
+        // Set root directory
+        if let Some(path) = &old_config.last_directory {
+            state.root = CanonicalPath::new(path).ok();
+        }
+
+        // Configure output
+        state.output.format = match old_config.output_format.as_str() {
             "markdown" => OutputFormat::Markdown,
             _ => OutputFormat::Xml,
         };
 
+        // Configure window
+        state.config.window.left_pane_ratio = old_config.split_position;
+
+        // Configure UI
+        state.config.ui.theme = match old_config.theme.as_str() {
+            "light" => Theme::Light,
+            "dark" => Theme::Dark,
+            _ => Theme::System,
+        };
+        state.config.ui.include_tree = old_config.include_tree;
+
+        // Configure ignore patterns
+        if !old_config.ignore_patterns.is_empty() {
+            state.config.ignore_patterns = old_config
+                .ignore_patterns
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+
+        // Apply theme based on config
+        let theme_str = match state.config.ui.theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "auto",
+        };
+        Self::apply_theme(cc, theme_str);
+
         Self {
-            selected_path: config.last_directory.clone(),
+            state,
             tree: ui::tree::DirectoryTree::new(),
-            split_pos: config.split_position,
-            output_content: String::new(),
-            is_generating: false,
-            output_format,
-            token_count: None,
             worker: WorkerHandle::new(),
             current_progress: None,
             error_message: None,
-            include_tree: config.include_tree,
-            ignore_patterns: if config.ignore_patterns.is_empty() {
-                ".*,node_modules,__pycache__,target,build,dist,_*".to_string()
-            } else {
-                config.ignore_patterns
-            },
-            search_query: String::new(),
-            output_search_active: false,
-            output_search_query: String::new(),
-            output_search_match_index: 0,
-            output_search_match_count: 0,
             config_manager,
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
-            theme,
             fs_watcher: FsWatcher::new(),
             files_changed: false,
             perf_overlay: PerfOverlay::default(),
@@ -159,7 +151,7 @@ impl FsPromptApp {
             "light" => false,
             "auto" | _ => Self::prefers_dark_theme(),
         };
-        Theme::apply_theme(ctx, dark_mode);
+        UiTheme::apply_theme(ctx, dark_mode);
     }
 
     /// Detect system theme preference
@@ -213,10 +205,10 @@ impl FsPromptApp {
             return;
         }
 
-        if let Some(root_path) = &self.selected_path {
-            self.is_generating = true;
-            self.output_content.clear();
-            self.token_count = None;
+        if let Some(root_path) = &self.state.root {
+            self.state.output.generating = true;
+            self.state.output.content = None;
+            self.state.output.tokens = None;
             self.error_message = None;
             self.current_progress = None;
             self.files_changed = false;
@@ -224,14 +216,14 @@ impl FsPromptApp {
             let command = WorkerCommand::GenerateOutput {
                 root_path: root_path.clone(),
                 selected_files,
-                format: self.output_format,
-                include_tree: self.include_tree,
-                ignore_patterns: self.ignore_patterns.clone(),
+                format: self.state.output.format,
+                include_tree: self.state.config.ui.include_tree,
+                ignore_patterns: self.state.config.ignore_patterns.join(","),
             };
 
             if let Err(e) = self.worker.send_command(command) {
                 self.error_message = Some(format!("Failed to start generation: {}", e));
-                self.is_generating = false;
+                self.state.output.generating = false;
             }
         }
     }
@@ -252,12 +244,12 @@ impl FsPromptApp {
                     content,
                     token_count,
                 } => {
-                    self.output_content = content;
-                    self.token_count = Some(TokenCount::from_chars(token_count * 4)); // Convert back from token count
-                    self.is_generating = false;
+                    self.state.output.content = Some(std::sync::Arc::new(content));
+                    self.state.output.tokens = Some(token_count);
+                    self.state.output.generating = false;
                     self.current_progress = None;
                     self.toast_manager
-                        .success(format!("Generated {} tokens", token_count));
+                        .success(format!("Generated {} tokens", token_count.get()));
                     ctx.request_repaint();
                 }
                 WorkerEvent::Error(msg) => {
@@ -267,7 +259,7 @@ impl FsPromptApp {
                     ctx.request_repaint();
                 }
                 WorkerEvent::Cancelled => {
-                    self.is_generating = false;
+                    self.state.output.generating = false;
                     self.current_progress = None;
                     self.error_message = Some("Generation cancelled".to_string());
                     self.toast_manager.warning("Generation cancelled");
@@ -281,47 +273,51 @@ impl FsPromptApp {
     fn copy_to_clipboard(&mut self) {
         use arboard::Clipboard;
 
-        match Clipboard::new() {
-            Ok(mut clipboard) => match clipboard.set_text(&self.output_content) {
-                Ok(()) => {
-                    self.toast_manager.success("Copied to clipboard!");
-                }
+        if let Some(content) = &self.state.output.content {
+            match Clipboard::new() {
+                Ok(mut clipboard) => match clipboard.set_text(content.as_str()) {
+                    Ok(()) => {
+                        self.toast_manager.success("Copied to clipboard!");
+                    }
+                    Err(e) => {
+                        self.toast_manager.error(format!("Failed to copy: {}", e));
+                    }
+                },
                 Err(e) => {
-                    self.toast_manager.error(format!("Failed to copy: {}", e));
+                    self.toast_manager
+                        .error(format!("Failed to access clipboard: {}", e));
                 }
-            },
-            Err(e) => {
-                self.toast_manager
-                    .error(format!("Failed to access clipboard: {}", e));
             }
         }
     }
 
     /// Saves the output content to a file
     fn save_to_file(&mut self) {
-        let extension = match self.output_format {
+        let extension = match self.state.output.format {
             OutputFormat::Xml => "xml",
             OutputFormat::Markdown => "md",
         };
 
         let default_filename = format!("codebase_export.{}", extension);
 
-        if let Some(path) = rfd::FileDialog::new()
-            .set_file_name(&default_filename)
-            .add_filter(&format!("{} files", extension.to_uppercase()), &[extension])
-            .add_filter("All files", &["*"])
-            .save_file()
-        {
-            match std::fs::write(&path, &self.output_content) {
-                Ok(()) => {
-                    self.toast_manager.success(format!(
-                        "Saved to {}",
-                        path.file_name().unwrap_or_default().to_string_lossy()
-                    ));
-                }
-                Err(e) => {
-                    self.toast_manager
-                        .error(format!("Failed to save file: {}", e));
+        if let Some(content) = &self.state.output.content {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_file_name(&default_filename)
+                .add_filter(&format!("{} files", extension.to_uppercase()), &[extension])
+                .add_filter("All files", &["*"])
+                .save_file()
+            {
+                match std::fs::write(&path, content.as_str()) {
+                    Ok(()) => {
+                        self.toast_manager.success(format!(
+                            "Saved to {}",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        ));
+                    }
+                    Err(e) => {
+                        self.toast_manager
+                            .error(format!("Failed to save file: {}", e));
+                    }
                 }
             }
         }
@@ -329,71 +325,68 @@ impl FsPromptApp {
 
     /// Updates search match count
     fn update_search_matches(&mut self) {
-        if self.output_search_query.is_empty() {
-            self.output_search_match_count = 0;
-            self.output_search_match_index = 0;
+        if self.state.search.output_search.query.is_empty() {
+            self.state.search.output_search.match_count = 0;
+            self.state.search.output_search.current_match = 0;
             return;
         }
 
-        let query = self.output_search_query.to_lowercase();
-        let content = self.output_content.to_lowercase();
+        if let Some(content) = &self.state.output.content {
+            let query = self.state.search.output_search.query.to_lowercase();
+            let content_lower = content.to_lowercase();
 
-        self.output_search_match_count = content.matches(&query).count();
+            self.state.search.output_search.match_count = content_lower.matches(&query).count();
 
-        // Reset to first match
-        if self.output_search_match_count > 0 {
-            self.output_search_match_index = 0;
+            // Reset to first match
+            if self.state.search.output_search.match_count > 0 {
+                self.state.search.output_search.current_match = 0;
+            }
         }
     }
 
     /// Navigate to next search match
     fn next_match(&mut self) {
-        if self.output_search_match_count > 0 {
-            self.output_search_match_index =
-                (self.output_search_match_index + 1) % self.output_search_match_count;
-        }
+        self.state.search.output_search.next_match();
     }
 
     /// Navigate to previous search match
     fn prev_match(&mut self) {
-        if self.output_search_match_count > 0 {
-            if self.output_search_match_index == 0 {
-                self.output_search_match_index = self.output_search_match_count - 1;
-            } else {
-                self.output_search_match_index -= 1;
-            }
-        }
+        self.state.search.output_search.prev_match();
     }
 
     /// Saves the current configuration
     fn save_config(&self) {
-        let config = AppConfig {
-            window_width: 1200.0, // We'll get actual size later
-            window_height: 800.0,
-            split_position: self.split_pos,
-            last_directory: self.selected_path.clone(),
-            ignore_patterns: self.ignore_patterns.clone(),
-            include_tree: self.include_tree,
-            output_format: match self.output_format {
+        let config = state::AppConfig {
+            window_width: self.state.config.window.width,
+            window_height: self.state.config.window.height,
+            split_position: self.state.config.window.left_pane_ratio,
+            last_directory: self.state.root.as_ref().map(|p| p.as_path().to_path_buf()),
+            ignore_patterns: self.state.config.ignore_patterns.join(", "),
+            include_tree: self.state.config.ui.include_tree,
+            output_format: match self.state.output.format {
                 OutputFormat::Xml => "xml".to_string(),
                 OutputFormat::Markdown => "markdown".to_string(),
             },
-            theme: self.theme.clone(),
+            theme: match self.state.config.ui.theme {
+                Theme::Light => "light".to_string(),
+                Theme::Dark => "dark".to_string(),
+                Theme::System => "auto".to_string(),
+            },
         };
 
         let _ = self.config_manager.save(&config);
     }
 
     /// Captures current selection state
-    fn capture_snapshot(&self) -> SelectionSnapshot {
-        SelectionSnapshot {
+    fn capture_snapshot(&self) -> state::SelectionSnapshot {
+        state::SelectionSnapshot {
             selected_files: self.tree.get_selected_files(),
             expanded_dirs: self.tree.get_expanded_dirs(),
         }
     }
 
     /// Restores a selection state
-    fn restore_snapshot(&mut self, snapshot: &SelectionSnapshot) {
+    fn restore_snapshot(&mut self, snapshot: &state::SelectionSnapshot) {
         self.tree
             .restore_selection(&snapshot.selected_files, &snapshot.expanded_dirs);
     }
@@ -437,28 +430,34 @@ impl eframe::App for FsPromptApp {
             // Ctrl+F for output search (only when output is available and not in tree search)
             if i.modifiers.ctrl
                 && i.key_pressed(egui::Key::F)
-                && !self.output_content.is_empty()
+                && self.state.output.content.is_some()
                 && !i.focused
             {
-                self.output_search_active = true;
+                self.state.search.output_search.active = true;
             }
 
             // Ctrl+G for Generate (when not generating and path is selected)
             if i.modifiers.ctrl
                 && i.key_pressed(egui::Key::G)
-                && !self.is_generating
-                && self.selected_path.is_some()
+                && !self.state.output.generating
+                && self.state.root.is_some()
             {
                 self.generate_output();
             }
 
             // Ctrl+C for Copy (when output is available)
-            if i.modifiers.ctrl && i.key_pressed(egui::Key::C) && !self.output_content.is_empty() {
+            if i.modifiers.ctrl
+                && i.key_pressed(egui::Key::C)
+                && self.state.output.content.is_some()
+            {
                 self.copy_to_clipboard();
             }
 
             // Ctrl+S for Save (when output is available)
-            if i.modifiers.ctrl && i.key_pressed(egui::Key::S) && !self.output_content.is_empty() {
+            if i.modifiers.ctrl
+                && i.key_pressed(egui::Key::S)
+                && self.state.output.content.is_some()
+            {
                 self.save_to_file();
             }
 
@@ -479,108 +478,134 @@ impl eframe::App for FsPromptApp {
         });
 
         // Determine current theme mode for styling
-        let dark_mode = match self.theme.as_str() {
-            "dark" => true,
-            "light" => false,
-            _ => Self::prefers_dark_theme(),
+        let _dark_mode = match self.state.config.ui.theme {
+            Theme::Dark => true,
+            Theme::Light => false,
+            Theme::System => Self::prefers_dark_theme(),
         };
 
         // Top panel with title and directory selector
         egui::TopBottomPanel::top("top_panel")
-            .exact_height(Theme::TOP_BAR_HEIGHT)
+            .exact_height(UiTheme::TOP_BAR_HEIGHT)
             .show(ctx, |ui| {
-                ui.add_space(Theme::SPACING_SM);
+                ui.add_space(UiTheme::SPACING_SM);
                 ui.horizontal(|ui| {
                     ui.heading("fsPrompt");
-                    ui.add_space(Theme::SPACING_MD);
+                    ui.add_space(UiTheme::SPACING_MD);
 
                     if ui.button("📁 Select Directory").clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                            self.selected_path = Some(path.clone());
-                            self.tree.set_ignore_patterns(&self.ignore_patterns);
-                            self.tree.set_root(path.clone());
+                            if let Ok(canonical_path) = CanonicalPath::new(&path) {
+                                self.state.root = Some(canonical_path.clone());
+                                self.tree.set_ignore_patterns(
+                                    &self.state.config.ignore_patterns.join(","),
+                                );
+                                self.tree.set_root(path.clone());
 
-                            // Start watching the directory
-                            if let Err(e) = self.fs_watcher.watch(&path) {
-                                self.toast_manager
-                                    .warning(format!("Failed to watch directory: {}", e));
+                                // Start watching the directory
+                                if let Err(e) = self.fs_watcher.watch(&canonical_path) {
+                                    self.toast_manager
+                                        .warning(format!("Failed to watch directory: {}", e));
+                                }
+
+                                self.files_changed = false;
+                                self.toast_manager.success(format!(
+                                    "Loaded {}",
+                                    path.file_name().unwrap_or_default().to_string_lossy()
+                                ));
                             }
-
-                            self.files_changed = false;
-                            self.toast_manager.success(format!(
-                                "Loaded {}",
-                                path.file_name().unwrap_or_default().to_string_lossy()
-                            ));
                         }
                     }
 
-                    if let Some(path) = &self.selected_path {
-                        ui.add_space(Theme::SPACING_SM);
-                        ui.label(format!("📂 {}", path.display()));
+                    if let Some(root) = &self.state.root {
+                        ui.add_space(UiTheme::SPACING_SM);
+                        ui.label(format!("📂 {}", root.as_path().display()));
                     }
 
                     // Theme toggle on the right
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.menu_button("🎨 Theme", |ui| {
                             if ui
-                                .radio_value(&mut self.theme, "auto".to_string(), "Auto")
+                                .radio_value(&mut self.state.config.ui.theme, Theme::System, "Auto")
                                 .clicked()
                             {
-                                Self::apply_theme_to_ctx(ctx, &self.theme);
+                                let theme_str = match self.state.config.ui.theme {
+                                    Theme::System => "auto",
+                                    Theme::Light => "light",
+                                    Theme::Dark => "dark",
+                                };
+                                Self::apply_theme_to_ctx(ctx, theme_str);
                                 self.save_config();
                                 self.toast_manager.success("Theme set to Auto");
                             }
                             if ui
-                                .radio_value(&mut self.theme, "light".to_string(), "Light")
+                                .radio_value(&mut self.state.config.ui.theme, Theme::Light, "Light")
                                 .clicked()
                             {
-                                Self::apply_theme_to_ctx(ctx, &self.theme);
+                                Self::apply_theme_to_ctx(ctx, "light");
                                 self.save_config();
                                 self.toast_manager.success("Theme set to Light");
                             }
                             if ui
-                                .radio_value(&mut self.theme, "dark".to_string(), "Dark")
+                                .radio_value(&mut self.state.config.ui.theme, Theme::Dark, "Dark")
                                 .clicked()
                             {
-                                Self::apply_theme_to_ctx(ctx, &self.theme);
+                                Self::apply_theme_to_ctx(ctx, "dark");
                                 self.save_config();
                                 self.toast_manager.success("Theme set to Dark");
                             }
                         });
                     });
                 });
-                ui.add_space(Theme::SPACING_SM);
+                ui.add_space(UiTheme::SPACING_SM);
             });
 
         // Left panel with directory tree and controls
         egui::SidePanel::left("left_panel")
-            .default_width(Theme::SIDEBAR_DEFAULT_WIDTH)
-            .width_range(Theme::SIDEBAR_MIN_WIDTH..=Theme::SIDEBAR_MAX_WIDTH)
+            .default_width(UiTheme::SIDEBAR_DEFAULT_WIDTH)
+            .width_range(UiTheme::SIDEBAR_MIN_WIDTH..=UiTheme::SIDEBAR_MAX_WIDTH)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.add_space(Theme::SPACING_MD);
+                ui.add_space(UiTheme::SPACING_MD);
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("Files & Directories").heading());
-                    ui.add_space(Theme::SPACING_MD);
+                    ui.add_space(UiTheme::SPACING_MD);
 
                     // Format selection
                     ui.horizontal(|ui| {
                         ui.label("Output format:");
-                        ui.radio_value(&mut self.output_format, OutputFormat::Xml, "XML");
-                        ui.radio_value(&mut self.output_format, OutputFormat::Markdown, "Markdown");
+                        ui.radio_value(&mut self.state.output.format, OutputFormat::Xml, "XML");
+                        ui.radio_value(
+                            &mut self.state.output.format,
+                            OutputFormat::Markdown,
+                            "Markdown",
+                        );
                     });
 
                     // Include tree checkbox
-                    ui.checkbox(&mut self.include_tree, "Include directory tree in output");
+                    ui.checkbox(
+                        &mut self.state.config.ui.include_tree,
+                        "Include directory tree in output",
+                    );
 
                     // Ignore patterns
                     ui.vertical(|ui| {
                         ui.label("Ignore patterns (comma-separated):");
-                        ui.text_edit_singleline(&mut self.ignore_patterns)
-                            .on_hover_text("e.g., .*, node_modules, __pycache__, target, _*");
+                        let mut patterns_str = self.state.config.ignore_patterns.join(", ");
+                        if ui
+                            .text_edit_singleline(&mut patterns_str)
+                            .on_hover_text("e.g., .*, node_modules, __pycache__, target, _*")
+                            .changed()
+                        {
+                            self.state.config.ignore_patterns = patterns_str
+                                .split(',')
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                        }
                     });
 
-                    ui.add_space(Theme::SPACING_MD);
+                    ui.add_space(UiTheme::SPACING_MD);
 
                     // Search bar with modern styling
                     ui.horizontal(|ui| {
@@ -588,15 +613,19 @@ impl eframe::App for FsPromptApp {
                         ui.spacing_mut().text_edit_width = ui.available_width() - 60.0;
                         let response = ui
                             .add(
-                                egui::TextEdit::singleline(&mut self.search_query)
-                                    .desired_width(f32::INFINITY)
-                                    .hint_text("Search files..."),
+                                egui::TextEdit::singleline(
+                                    &mut self.state.search.tree_search.query,
+                                )
+                                .desired_width(f32::INFINITY)
+                                .hint_text("Search files..."),
                             )
                             .on_hover_text("Search for files and folders");
 
                         // Clear button
-                        if !self.search_query.is_empty() && ui.small_button("✕").clicked() {
-                            self.search_query.clear();
+                        if !self.state.search.tree_search.query.is_empty()
+                            && ui.small_button("✕").clicked()
+                        {
+                            self.state.search.tree_search.query.clear();
                         }
 
                         // Focus on Ctrl+F
@@ -605,33 +634,34 @@ impl eframe::App for FsPromptApp {
                         }
                     });
 
-                    ui.add_space(Theme::SPACING_MD);
+                    ui.add_space(UiTheme::SPACING_MD);
 
                     // Show refresh notification if files have changed
                     if self.files_changed {
                         ui.horizontal(|ui| {
                             ui.colored_label(
-                                Theme::WARNING,
+                                UiTheme::WARNING,
                                 "⚠️ Files have changed since last generation",
                             );
                             if ui.small_button("Refresh").clicked() {
                                 // Reload the tree
-                                if let Some(path) = &self.selected_path {
-                                    self.tree.set_root(path.clone());
+                                if let Some(root) = &self.state.root {
+                                    self.tree.set_root(root.as_path().to_path_buf());
                                     self.files_changed = false;
                                     self.toast_manager.success("Directory refreshed");
                                 }
                             }
                         });
-                        ui.add_space(Theme::SPACING_MD);
+                        ui.add_space(UiTheme::SPACING_MD);
                     }
 
                     // Generate button - make it prominent
-                    ui.add_space(Theme::SPACING_SM);
+                    ui.add_space(UiTheme::SPACING_SM);
                     ui.horizontal_centered(|ui| {
-                        let button_enabled = !self.is_generating && self.selected_path.is_some();
+                        let button_enabled =
+                            !self.state.output.generating && self.state.root.is_some();
                         let generate_button = egui::Button::new("🚀 Generate")
-                            .min_size(egui::vec2(120.0, Theme::BUTTON_HEIGHT));
+                            .min_size(egui::vec2(120.0, UiTheme::BUTTON_HEIGHT));
 
                         if ui
                             .add_enabled(button_enabled, generate_button)
@@ -641,7 +671,7 @@ impl eframe::App for FsPromptApp {
                             self.generate_output();
                         }
 
-                        if self.is_generating {
+                        if self.state.output.generating {
                             ui.spinner();
 
                             if let Some((stage, current, total)) = &self.current_progress {
@@ -658,25 +688,26 @@ impl eframe::App for FsPromptApp {
                             if ui.button("Cancel").clicked() {
                                 let _ = self.worker.send_command(WorkerCommand::Cancel);
                             }
-                        } else if self.selected_path.is_none() {
+                        } else if self.state.root.is_none() {
                             ui.label("Select a directory first");
                         } else {
                             ui.label("Select files to include");
                         }
                     });
 
-                    ui.add_space(Theme::SPACING_MD);
+                    ui.add_space(UiTheme::SPACING_MD);
 
                     // Show error message if any
                     if let Some(error) = &self.error_message {
-                        ui.colored_label(Theme::ERROR, format!("⚠️ {}", error));
-                        ui.add_space(Theme::SPACING_MD);
+                        ui.colored_label(UiTheme::ERROR, format!("⚠️ {}", error));
+                        ui.add_space(UiTheme::SPACING_MD);
                     }
 
                     // Track selection state before showing tree
                     let snapshot_before = self.capture_snapshot();
 
-                    self.tree.show_with_search(ui, &self.search_query);
+                    self.tree
+                        .show_with_search(ui, &self.state.search.tree_search.query);
 
                     // Check if selection changed and record state
                     let snapshot_after = self.capture_snapshot();
@@ -688,29 +719,29 @@ impl eframe::App for FsPromptApp {
 
         // Right panel with output
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_space(Theme::SPACING_MD);
+            ui.add_space(UiTheme::SPACING_MD);
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Output Preview").heading());
 
-                    if let Some(token_count) = self.token_count {
+                    if let Some(token_count) = self.state.output.tokens {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let level = token_count.level();
                             let (label, color) = match level {
-                                core::types::TokenLevel::Low => ("Low", Theme::SUCCESS),
-                                core::types::TokenLevel::Medium => ("Medium", Theme::WARNING),
-                                core::types::TokenLevel::High => ("High", Theme::ERROR),
+                                core::types::TokenLevel::Low => ("Low", UiTheme::SUCCESS),
+                                core::types::TokenLevel::Medium => ("Medium", UiTheme::WARNING),
+                                core::types::TokenLevel::High => ("High", UiTheme::ERROR),
                             };
 
                             ui.colored_label(color, format!("◆ {} tokens", token_count.get()));
                             ui.colored_label(color, format!("[{}]", label));
 
-                            ui.add_space(Theme::SPACING_MD);
+                            ui.add_space(UiTheme::SPACING_MD);
 
                             // Add save button
                             if ui
                                 .add_enabled(
-                                    !self.output_content.is_empty(),
+                                    self.state.output.content.is_some(),
                                     egui::Button::new("💾 Save"),
                                 )
                                 .on_hover_text("Save to file (Ctrl+S)")
@@ -722,7 +753,7 @@ impl eframe::App for FsPromptApp {
                             // Add copy button
                             if ui
                                 .add_enabled(
-                                    !self.output_content.is_empty(),
+                                    self.state.output.content.is_some(),
                                     egui::Button::new("📋 Copy"),
                                 )
                                 .on_hover_text("Copy to clipboard (Ctrl+C)")
@@ -731,7 +762,7 @@ impl eframe::App for FsPromptApp {
                                 self.copy_to_clipboard();
                             }
                         });
-                    } else if !self.output_content.is_empty() {
+                    } else if self.state.output.content.is_some() {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .button("📋 Copy")
@@ -754,30 +785,31 @@ impl eframe::App for FsPromptApp {
                 ui.separator();
 
                 // Search bar for output
-                if self.output_search_active && !self.output_content.is_empty() {
+                if self.state.search.output_search.active && self.state.output.content.is_some() {
                     ui.horizontal(|ui| {
                         ui.label("🔍 Find:");
-                        let response = ui.text_edit_singleline(&mut self.output_search_query);
+                        let response =
+                            ui.text_edit_singleline(&mut self.state.search.output_search.query);
 
                         if response.changed() {
                             self.update_search_matches();
                         }
 
                         if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                            self.output_search_active = false;
-                            self.output_search_query.clear();
+                            self.state.search.output_search.active = false;
+                            self.state.search.output_search.query.clear();
                         }
 
                         response.request_focus();
 
                         // Show match count and navigation
-                        if !self.output_search_query.is_empty()
-                            && self.output_search_match_count > 0
+                        if !self.state.search.output_search.query.is_empty()
+                            && self.state.search.output_search.match_count > 0
                         {
                             ui.label(format!(
                                 "{} / {}",
-                                self.output_search_match_index + 1,
-                                self.output_search_match_count
+                                self.state.search.output_search.current_match + 1,
+                                self.state.search.output_search.match_count
                             ));
 
                             if ui.small_button("↑").clicked() {
@@ -787,31 +819,31 @@ impl eframe::App for FsPromptApp {
                             if ui.small_button("↓").clicked() {
                                 self.next_match();
                             }
-                        } else if !self.output_search_query.is_empty() {
+                        } else if !self.state.search.output_search.query.is_empty() {
                             ui.label("No matches");
                         }
 
                         if ui.small_button("✕").clicked() {
-                            self.output_search_active = false;
-                            self.output_search_query.clear();
+                            self.state.search.output_search.active = false;
+                            self.state.search.output_search.query.clear();
                         }
                     });
-                    ui.add_space(Theme::SPACING_MD);
+                    ui.add_space(UiTheme::SPACING_MD);
                 }
 
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if self.output_content.is_empty() {
-                            ui.label("Generated output will appear here...");
-                        } else {
+                        if let Some(content) = &self.state.output.content {
                             // Use monospace font for code output
                             ui.style_mut().override_font_id = Some(egui::FontId::monospace(12.0));
                             ui.add(
-                                egui::TextEdit::multiline(&mut self.output_content.as_str())
+                                egui::TextEdit::multiline(&mut content.as_str())
                                     .desired_width(f32::INFINITY)
                                     .interactive(false),
                             );
+                        } else {
+                            ui.label("Generated output will appear here...");
                         }
                     });
             });
@@ -842,94 +874,57 @@ mod tests {
         // Test that we can create an app instance
         // Note: We can't easily test the CreationContext, so we use a simplified test
         let app = FsPromptApp {
-            selected_path: None,
+            state: AppState::default(),
             tree: ui::tree::DirectoryTree::new(),
-            split_pos: 0.3,
-            output_content: String::new(),
-            is_generating: false,
-            output_format: OutputFormat::Xml,
-            token_count: None,
             worker: WorkerHandle::new(),
             current_progress: None,
             error_message: None,
-            include_tree: true,
-            ignore_patterns: String::new(),
-            search_query: String::new(),
-            output_search_active: false,
-            output_search_query: String::new(),
-            output_search_match_index: 0,
-            output_search_match_count: 0,
             config_manager: ConfigManager::new(),
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
-            theme: "auto".to_string(),
             fs_watcher: FsWatcher::new(),
             files_changed: false,
             perf_overlay: PerfOverlay::default(),
         };
 
-        assert!(app.selected_path.is_none());
-        assert!(app.output_content.is_empty());
-        assert!(!app.is_generating);
+        assert!(app.state.root.is_none());
+        assert!(app.state.output.content.is_none());
+        assert!(!app.state.output.generating);
     }
 
     #[test]
     fn test_app_with_path() {
-        let test_path = std::path::PathBuf::from("/test/path");
-        let app = FsPromptApp {
-            selected_path: Some(test_path.clone()),
+        // Since CanonicalPath requires the path to exist, we'll test the structure
+        let mut app = FsPromptApp {
+            state: AppState::default(),
             tree: ui::tree::DirectoryTree::new(),
-            split_pos: 0.3,
-            output_content: String::new(),
-            is_generating: false,
-            output_format: OutputFormat::Xml,
-            token_count: None,
             worker: WorkerHandle::new(),
             current_progress: None,
             error_message: None,
-            include_tree: true,
-            ignore_patterns: String::new(),
-            search_query: String::new(),
-            output_search_active: false,
-            output_search_query: String::new(),
-            output_search_match_index: 0,
-            output_search_match_count: 0,
             config_manager: ConfigManager::new(),
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
-            theme: "auto".to_string(),
             fs_watcher: FsWatcher::new(),
             files_changed: false,
             perf_overlay: PerfOverlay::default(),
         };
 
-        assert_eq!(app.selected_path, Some(test_path));
+        // Test that we can set output format
+        app.state.output.format = OutputFormat::Markdown;
+        assert_eq!(app.state.output.format, OutputFormat::Markdown);
     }
 
     #[test]
     fn test_app_debug_impl() {
         let app = FsPromptApp {
-            selected_path: None,
+            state: AppState::default(),
             tree: ui::tree::DirectoryTree::new(),
-            split_pos: 0.3,
-            output_content: String::new(),
-            is_generating: false,
-            output_format: OutputFormat::Xml,
-            token_count: None,
             worker: WorkerHandle::new(),
             current_progress: None,
             error_message: None,
-            include_tree: true,
-            ignore_patterns: String::new(),
-            search_query: String::new(),
-            output_search_active: false,
-            output_search_query: String::new(),
-            output_search_match_index: 0,
-            output_search_match_count: 0,
             config_manager: ConfigManager::new(),
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
-            theme: "auto".to_string(),
             fs_watcher: FsWatcher::new(),
             files_changed: false,
             perf_overlay: PerfOverlay::default(),
@@ -938,6 +933,6 @@ mod tests {
         // Test that Debug is implemented correctly
         let debug_str = format!("{:?}", app);
         assert!(debug_str.contains("FsPromptApp"));
-        assert!(debug_str.contains("selected_path"));
+        assert!(debug_str.contains("state"));
     }
 }

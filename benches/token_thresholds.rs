@@ -1,4 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
+use fsprompt::core::types::CanonicalPath;
 use fsprompt::utils::parallel_fs::{read_files_parallel, scan_directory_parallel};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -185,7 +186,7 @@ fn bench_20k_tokens(c: &mut Criterion) {
             let entries = scan_directory_parallel(&root_path, None, &[]);
 
             // 2. Collect file paths
-            let file_paths: Vec<PathBuf> = entries
+            let file_paths: Vec<CanonicalPath> = entries
                 .iter()
                 .filter(|e| !e.is_dir)
                 .map(|e| e.path.clone())
@@ -198,7 +199,11 @@ fn bench_20k_tokens(c: &mut Criterion) {
             let mut output = String::with_capacity(100 * 1024);
             for (path, content) in contents {
                 if let Ok(content) = content {
-                    output.push_str(&format!("## {}\n```\n{}\n```\n", path.display(), content));
+                    output.push_str(&format!(
+                        "## {}\n```\n{}\n```\n",
+                        path.as_path().display(),
+                        content
+                    ));
                 }
             }
 
@@ -220,7 +225,7 @@ fn bench_100k_tokens(c: &mut Criterion) {
     group.bench_function("full_workflow", |b| {
         b.iter(|| {
             let entries = scan_directory_parallel(&root_path, None, &[]);
-            let file_paths: Vec<PathBuf> = entries
+            let file_paths: Vec<CanonicalPath> = entries
                 .iter()
                 .filter(|e| !e.is_dir)
                 .map(|e| e.path.clone())
@@ -231,7 +236,11 @@ fn bench_100k_tokens(c: &mut Criterion) {
             let mut output = String::with_capacity(500 * 1024);
             for (path, content) in contents {
                 if let Ok(content) = content {
-                    output.push_str(&format!("## {}\n```\n{}\n```\n", path.display(), content));
+                    output.push_str(&format!(
+                        "## {}\n```\n{}\n```\n",
+                        path.as_path().display(),
+                        content
+                    ));
                 }
             }
 
@@ -253,7 +262,7 @@ fn bench_200k_tokens(c: &mut Criterion) {
     group.bench_function("full_workflow", |b| {
         b.iter(|| {
             let entries = scan_directory_parallel(&root_path, None, &[]);
-            let file_paths: Vec<PathBuf> = entries
+            let file_paths: Vec<CanonicalPath> = entries
                 .iter()
                 .filter(|e| !e.is_dir)
                 .map(|e| e.path.clone())
@@ -264,7 +273,11 @@ fn bench_200k_tokens(c: &mut Criterion) {
             let mut output = String::with_capacity(1024 * 1024);
             for (path, content) in contents {
                 if let Ok(content) = content {
-                    output.push_str(&format!("## {}\n```\n{}\n```\n", path.display(), content));
+                    output.push_str(&format!(
+                        "## {}\n```\n{}\n```\n",
+                        path.as_path().display(),
+                        content
+                    ));
                 }
             }
 
@@ -297,7 +310,7 @@ fn bench_operations_by_scale(c: &mut Criterion) {
 
         // Pre-collect file paths for file reading benchmark
         let entries = scan_directory_parallel(&root_path, None, &[]);
-        let file_paths: Vec<PathBuf> = entries
+        let file_paths: Vec<CanonicalPath> = entries
             .iter()
             .filter(|e| !e.is_dir)
             .map(|e| e.path.clone())
