@@ -1,5 +1,6 @@
 //! User interface components for fsPrompt
 
+pub mod toast;
 pub mod tree;
 
 pub use crate::core::types::OutputFormat;

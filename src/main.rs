@@ -24,6 +24,7 @@ mod workers;
 
 use core::types::{OutputFormat, TokenCount};
 use state::{AppConfig, ConfigManager, HistoryManager, SelectionSnapshot};
+use ui::toast::ToastManager;
 use workers::{WorkerCommand, WorkerEvent, WorkerHandle};
 
 fn main() -> eframe::Result<()> {
@@ -82,6 +83,8 @@ struct FsPromptApp {
     config_manager: ConfigManager,
     /// History manager for undo/redo
     history_manager: HistoryManager,
+    /// Toast notification manager
+    toast_manager: ToastManager,
 }
 
 impl FsPromptApp {
@@ -124,6 +127,7 @@ impl FsPromptApp {
             output_search_match_count: 0,
             config_manager,
             history_manager: HistoryManager::new(20),
+            toast_manager: ToastManager::new(),
         }
     }
 
@@ -179,10 +183,13 @@ impl FsPromptApp {
                     self.token_count = Some(TokenCount::from_chars(token_count * 4)); // Convert back from token count
                     self.is_generating = false;
                     self.current_progress = None;
+                    self.toast_manager
+                        .success(format!("Generated {} tokens", token_count));
                     ctx.request_repaint();
                 }
                 WorkerEvent::Error(msg) => {
-                    self.error_message = Some(msg);
+                    self.error_message = Some(msg.clone());
+                    self.toast_manager.error(msg);
                     // Don't stop generation here, as we might still get output
                     ctx.request_repaint();
                 }
@@ -190,6 +197,7 @@ impl FsPromptApp {
                     self.is_generating = false;
                     self.current_progress = None;
                     self.error_message = Some("Generation cancelled".to_string());
+                    self.toast_manager.warning("Generation cancelled");
                     ctx.request_repaint();
                 }
             }
@@ -197,29 +205,27 @@ impl FsPromptApp {
     }
 
     /// Copies the output content to clipboard
-    fn copy_to_clipboard(&self) {
+    fn copy_to_clipboard(&mut self) {
         use arboard::Clipboard;
 
         match Clipboard::new() {
-            Ok(mut clipboard) => {
-                match clipboard.set_text(&self.output_content) {
-                    Ok(()) => {
-                        // TODO: Show success toast when toast system is implemented
-                        println!("Copied to clipboard!");
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to copy to clipboard: {}", e);
-                    }
+            Ok(mut clipboard) => match clipboard.set_text(&self.output_content) {
+                Ok(()) => {
+                    self.toast_manager.success("Copied to clipboard!");
                 }
-            }
+                Err(e) => {
+                    self.toast_manager.error(format!("Failed to copy: {}", e));
+                }
+            },
             Err(e) => {
-                eprintln!("Failed to access clipboard: {}", e);
+                self.toast_manager
+                    .error(format!("Failed to access clipboard: {}", e));
             }
         }
     }
 
     /// Saves the output content to a file
-    fn save_to_file(&self) {
+    fn save_to_file(&mut self) {
         let extension = match self.output_format {
             OutputFormat::Xml => "xml",
             OutputFormat::Markdown => "md",
@@ -235,11 +241,14 @@ impl FsPromptApp {
         {
             match std::fs::write(&path, &self.output_content) {
                 Ok(()) => {
-                    // TODO: Show success toast when toast system is implemented
-                    println!("Saved to: {}", path.display());
+                    self.toast_manager.success(format!(
+                        "Saved to {}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ));
                 }
                 Err(e) => {
-                    eprintln!("Failed to save file: {}", e);
+                    self.toast_manager
+                        .error(format!("Failed to save file: {}", e));
                 }
             }
         }
@@ -394,7 +403,11 @@ impl eframe::App for FsPromptApp {
                 if ui.button("Select Directory").clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_folder() {
                         self.selected_path = Some(path.clone());
-                        self.tree.set_root(path);
+                        self.tree.set_root(path.clone());
+                        self.toast_manager.success(format!(
+                            "Loaded {}",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        ));
                     }
                 }
 
@@ -652,6 +665,9 @@ impl eframe::App for FsPromptApp {
                     });
             });
         });
+
+        // Show toast notifications
+        self.toast_manager.show_ui(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -688,6 +704,7 @@ mod tests {
             output_search_match_count: 0,
             config_manager: ConfigManager::new(),
             history_manager: HistoryManager::new(20),
+            toast_manager: ToastManager::new(),
         };
 
         assert!(app.selected_path.is_none());
@@ -718,6 +735,7 @@ mod tests {
             output_search_match_count: 0,
             config_manager: ConfigManager::new(),
             history_manager: HistoryManager::new(20),
+            toast_manager: ToastManager::new(),
         };
 
         assert_eq!(app.selected_path, Some(test_path));
@@ -745,6 +763,7 @@ mod tests {
             output_search_match_count: 0,
             config_manager: ConfigManager::new(),
             history_manager: HistoryManager::new(20),
+            toast_manager: ToastManager::new(),
         };
 
         // Test that Debug is implemented correctly
