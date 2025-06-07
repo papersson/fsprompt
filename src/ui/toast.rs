@@ -133,6 +133,11 @@ impl ToastManager {
         self.show(Toast::error(message));
     }
 
+    /// Shows an info toast (uses warning variant)
+    pub fn info(&mut self, message: impl Into<String>) {
+        self.show(Toast::warning(message));
+    }
+
     /// Updates the toast state (removes expired toasts)
     pub fn update(&mut self) {
         if let Some(toast) = &self.current_toast {

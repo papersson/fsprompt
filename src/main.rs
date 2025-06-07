@@ -20,11 +20,13 @@ use eframe::egui;
 mod core;
 mod state;
 mod ui;
+mod watcher;
 mod workers;
 
 use core::types::{OutputFormat, TokenCount};
 use state::{AppConfig, ConfigManager, HistoryManager, SelectionSnapshot};
 use ui::toast::ToastManager;
+use watcher::FsWatcher;
 use workers::{WorkerCommand, WorkerEvent, WorkerHandle};
 
 fn main() -> eframe::Result<()> {
@@ -87,6 +89,10 @@ struct FsPromptApp {
     toast_manager: ToastManager,
     /// Current theme
     theme: String,
+    /// Filesystem watcher
+    fs_watcher: FsWatcher,
+    /// Whether files have changed since last generation
+    files_changed: bool,
 }
 
 impl FsPromptApp {
@@ -131,6 +137,8 @@ impl FsPromptApp {
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
             theme,
+            fs_watcher: FsWatcher::new(),
+            files_changed: false,
         }
     }
 
@@ -174,6 +182,29 @@ impl FsPromptApp {
         true
     }
 
+    /// Check for filesystem changes
+    fn check_fs_changes(&mut self, ctx: &egui::Context) {
+        if let Some(event) = self.fs_watcher.check_events() {
+            match event {
+                watcher::WatcherEvent::Changed(paths) => {
+                    self.files_changed = true;
+                    let count = paths.len();
+                    if count == 1 {
+                        self.toast_manager
+                            .info("1 file changed in the watched directory");
+                    } else {
+                        self.toast_manager
+                            .info(format!("{} files changed in the watched directory", count));
+                    }
+                    ctx.request_repaint();
+                }
+                watcher::WatcherEvent::Error(e) => {
+                    self.toast_manager.error(format!("Watcher error: {}", e));
+                }
+            }
+        }
+    }
+
     /// Generates output from selected files
     fn generate_output(&mut self) {
         let selected_files = self.tree.collect_selected_files();
@@ -190,6 +221,7 @@ impl FsPromptApp {
             self.token_count = None;
             self.error_message = None;
             self.current_progress = None;
+            self.files_changed = false;
 
             let command = WorkerCommand::GenerateOutput {
                 root_path: root_path.clone(),
@@ -396,6 +428,9 @@ impl eframe::App for FsPromptApp {
         // Process worker events
         self.process_worker_events(ctx);
 
+        // Check for filesystem changes
+        self.check_fs_changes(ctx);
+
         // Global keyboard shortcuts
         ctx.input(|i| {
             // Ctrl+F for output search (only when output is available and not in tree search)
@@ -448,6 +483,14 @@ impl eframe::App for FsPromptApp {
                     if let Some(path) = rfd::FileDialog::new().pick_folder() {
                         self.selected_path = Some(path.clone());
                         self.tree.set_root(path.clone());
+
+                        // Start watching the directory
+                        if let Err(e) = self.fs_watcher.watch(&path) {
+                            self.toast_manager
+                                .warning(format!("Failed to watch directory: {}", e));
+                        }
+
+                        self.files_changed = false;
                         self.toast_manager.success(format!(
                             "Loaded {}",
                             path.file_name().unwrap_or_default().to_string_lossy()
@@ -544,6 +587,25 @@ impl eframe::App for FsPromptApp {
                     });
 
                     ui.separator();
+
+                    // Show refresh notification if files have changed
+                    if self.files_changed {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(255, 152, 0),
+                                "⚠️ Files have changed since last generation",
+                            );
+                            if ui.small_button("Refresh").clicked() {
+                                // Reload the tree
+                                if let Some(path) = &self.selected_path {
+                                    self.tree.set_root(path.clone());
+                                    self.files_changed = false;
+                                    self.toast_manager.success("Directory refreshed");
+                                }
+                            }
+                        });
+                        ui.separator();
+                    }
 
                     // Generate button
                     ui.horizontal(|ui| {
@@ -745,6 +807,9 @@ impl eframe::App for FsPromptApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Stop watching filesystem
+        self.fs_watcher.stop();
+
         // Save configuration when exiting
         self.save_config();
     }
@@ -780,6 +845,8 @@ mod tests {
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
             theme: "auto".to_string(),
+            fs_watcher: FsWatcher::new(),
+            files_changed: false,
         };
 
         assert!(app.selected_path.is_none());
@@ -812,6 +879,8 @@ mod tests {
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
             theme: "auto".to_string(),
+            fs_watcher: FsWatcher::new(),
+            files_changed: false,
         };
 
         assert_eq!(app.selected_path, Some(test_path));
@@ -841,6 +910,8 @@ mod tests {
             history_manager: HistoryManager::new(20),
             toast_manager: ToastManager::new(),
             theme: "auto".to_string(),
+            fs_watcher: FsWatcher::new(),
+            files_changed: false,
         };
 
         // Test that Debug is implemented correctly
