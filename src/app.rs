@@ -1,8 +1,7 @@
 //! Main application state and core logic
 
 use crate::core::types::{
-    AppState, CanonicalPath, FileCount, HistorySize, OutputFormat, PatternString, ProgressCount,
-    Theme,
+    AppState, FileCount, HistorySize, OutputFormat, PatternString, ProgressCount, Theme,
 };
 use crate::state::{ConfigManager, HistoryManager, SelectionSnapshot};
 use crate::ui::toast::ToastManager;
@@ -56,42 +55,14 @@ impl FsPromptApp {
     #[must_use]
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let config_manager = ConfigManager::new();
-        let old_config = config_manager.load();
+        // Load configuration
+        let loaded_config = config_manager.load();
 
-        // Create AppState from old config
-        let mut state = AppState::default();
-
-        // Set root directory
-        if let Some(path) = &old_config.last_directory {
-            state.root = CanonicalPath::new(path).ok();
-        }
-
-        // Configure output
-        state.output.format = match old_config.output_format.as_str() {
-            "markdown" => OutputFormat::Markdown,
-            _ => OutputFormat::Xml,
+        // Create AppState with loaded config
+        let state = AppState {
+            config: loaded_config,
+            ..AppState::default()
         };
-
-        // Configure window
-        state.config.window.left_pane_ratio = old_config.split_position;
-
-        // Configure UI
-        state.config.ui.theme = match old_config.theme.as_str() {
-            "light" => Theme::Light,
-            "dark" => Theme::Dark,
-            _ => Theme::System,
-        };
-        state.config.ui.include_tree = old_config.include_tree;
-
-        // Configure ignore patterns
-        if !old_config.ignore_patterns.is_empty() {
-            state.config.ignore_patterns = old_config
-                .ignore_patterns
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-        }
 
         // Apply theme based on config
         let theme_str = match state.config.ui.theme {
@@ -332,25 +303,7 @@ impl FsPromptApp {
 
     /// Saves the current configuration
     pub fn save_config(&self) {
-        let config = crate::state::AppConfig {
-            window_width: self.state.config.window.width,
-            window_height: self.state.config.window.height,
-            split_position: self.state.config.window.left_pane_ratio,
-            last_directory: self.state.root.as_ref().map(|p| p.as_path().to_path_buf()),
-            ignore_patterns: self.state.config.ignore_patterns.join(", "),
-            include_tree: self.state.config.ui.include_tree,
-            output_format: match self.state.output.format {
-                OutputFormat::Xml => "xml".to_string(),
-                OutputFormat::Markdown => "markdown".to_string(),
-            },
-            theme: match self.state.config.ui.theme {
-                Theme::Light => "light".to_string(),
-                Theme::Dark => "dark".to_string(),
-                Theme::System => "auto".to_string(),
-            },
-        };
-
-        let _ = self.config_manager.save(&config);
+        let _ = self.config_manager.save(&self.state.config);
     }
 
     /// Captures current selection state

@@ -3,5 +3,5 @@
 pub mod config;
 pub mod history;
 
-pub use config::{AppConfig, ConfigManager};
+pub use config::ConfigManager;
 pub use history::{HistoryManager, SelectionSnapshot};

@@ -26,6 +26,12 @@ pub fn scan_directory_parallel(
     max_depth: Option<usize>,
     ignore_patterns: &[String],
 ) -> Vec<DirectoryEntry> {
+    // Create canonical root for path validation
+    let canonical_root = match CanonicalPath::new(root) {
+        Ok(cr) => cr,
+        Err(_) => return Vec::new(), // Return empty if root is invalid
+    };
+
     let entries = Arc::new(Mutex::new(Vec::new()));
     let entries_clone = Arc::clone(&entries);
 
@@ -60,13 +66,19 @@ pub fn scan_directory_parallel(
 
     walker.run(|| {
         let entries = Arc::clone(&entries_clone);
+        let canonical_root = canonical_root.clone();
         Box::new(move |result| {
             if let Ok(entry) = result {
                 let path_buf = entry.path().to_path_buf();
-                if let Ok(canonical_path) = CanonicalPath::new(&path_buf) {
+                // Validate path is within root to prevent traversal attacks
+                if let Ok(canonical_path) =
+                    CanonicalPath::new_within_root(&path_buf, &canonical_root)
+                {
                     let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
                     let name = entry.file_name().to_string_lossy().into_owned();
-                    let parent = path_buf.parent().and_then(|p| CanonicalPath::new(p).ok());
+                    let parent = path_buf
+                        .parent()
+                        .and_then(|p| CanonicalPath::new_within_root(p, &canonical_root).ok());
 
                     let dir_entry = DirectoryEntry {
                         path: canonical_path,
@@ -116,6 +128,45 @@ pub fn build_tree_from_entries(
     }
 
     tree
+}
+
+/// Read multiple files in parallel with path validation
+/// Validates all paths are within the root directory before reading
+pub fn read_files_parallel_secure(
+    file_paths: &[CanonicalPath],
+    root: &CanonicalPath,
+    use_mmap_threshold: usize,
+) -> Vec<(CanonicalPath, Result<String, String>)> {
+    file_paths
+        .par_iter()
+        .map(|path| {
+            // Validate path is within root
+            if !path.is_contained_within(root) {
+                return (
+                    path.clone(),
+                    Err("Security error: path traversal detected".to_string()),
+                );
+            }
+
+            let result = if let Ok(metadata) = std::fs::metadata(path.as_path()) {
+                if metadata.len() as usize > use_mmap_threshold {
+                    // Use memory-mapped reading for large files
+                    read_file_mmap(path.as_path())
+                } else {
+                    // Use standard reading for small files
+                    std::fs::read_to_string(path.as_path())
+                        .map_err(|e| format!("Failed to read file: {}", e))
+                }
+            } else {
+                Err(format!(
+                    "Failed to get metadata for {}: file may not exist or be inaccessible",
+                    path.as_path().display()
+                ))
+            };
+
+            (path.clone(), result)
+        })
+        .collect()
 }
 
 /// Parallel file reading with memory mapping for large files

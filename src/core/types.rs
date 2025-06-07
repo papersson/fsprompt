@@ -2,6 +2,7 @@
 
 //! Redesigned type system for fsPrompt with improved expressiveness and type safety
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,6 +40,27 @@ impl CanonicalPath {
     /// Get parent directory
     pub fn parent(&self) -> Option<Self> {
         self.0.parent().and_then(|p| Self::new(p).ok())
+    }
+
+    /// Check if this path is contained within the given root path
+    /// This prevents path traversal attacks by ensuring the canonicalized path
+    /// remains within the expected directory tree
+    #[must_use]
+    pub fn is_contained_within(&self, root: &CanonicalPath) -> bool {
+        self.0.starts_with(&root.0)
+    }
+
+    /// Create a new canonical path that is guaranteed to be within the root
+    /// Returns an error if the path would escape the root directory
+    pub fn new_within_root(path: impl AsRef<Path>, root: &CanonicalPath) -> std::io::Result<Self> {
+        let canonical = Self::new(path)?;
+        if !canonical.is_contained_within(root) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Path traversal detected: path escapes root directory",
+            ));
+        }
+        Ok(canonical)
     }
 }
 
@@ -812,7 +834,7 @@ pub struct OutputState {
 }
 
 /// Application configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Window settings
     pub window: WindowConfig,
@@ -922,7 +944,7 @@ impl Default for AppConfig {
 }
 
 /// Window configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowConfig {
     /// Window width
     pub width: f32,
@@ -1002,7 +1024,7 @@ impl Default for WindowConfig {
 }
 
 /// UI configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
     /// Theme preference
     pub theme: Theme,
@@ -1026,7 +1048,7 @@ impl Default for UiConfig {
 }
 
 /// Performance configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceConfig {
     /// Maximum concurrent file reads
     pub max_concurrent_reads: usize,
@@ -1047,7 +1069,7 @@ impl Default for PerformanceConfig {
 }
 
 /// UI Theme options
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Theme {
     /// Light theme
     Light,
