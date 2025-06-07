@@ -17,15 +17,17 @@
 
 use eframe::egui;
 
-mod core;
-mod state;
-mod ui;
-mod watcher;
-mod workers;
+pub mod core;
+pub mod state;
+pub mod ui;
+pub mod utils;
+pub mod watcher;
+pub mod workers;
 
 use core::types::{OutputFormat, TokenCount};
 use state::{AppConfig, ConfigManager, HistoryManager, SelectionSnapshot};
 use ui::toast::ToastManager;
+use utils::perf::PerfOverlay;
 use watcher::FsWatcher;
 use workers::{WorkerCommand, WorkerEvent, WorkerHandle};
 
@@ -93,6 +95,8 @@ struct FsPromptApp {
     fs_watcher: FsWatcher,
     /// Whether files have changed since last generation
     files_changed: bool,
+    /// Performance overlay
+    perf_overlay: PerfOverlay,
 }
 
 impl FsPromptApp {
@@ -139,6 +143,7 @@ impl FsPromptApp {
             theme,
             fs_watcher: FsWatcher::new(),
             files_changed: false,
+            perf_overlay: PerfOverlay::default(),
         }
     }
 
@@ -425,6 +430,9 @@ impl FsPromptApp {
 
 impl eframe::App for FsPromptApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Record frame start for performance monitoring
+        self.perf_overlay.frame_start();
+
         // Process worker events
         self.process_worker_events(ctx);
 
@@ -470,6 +478,11 @@ impl eframe::App for FsPromptApp {
             if i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::Z) {
                 self.redo();
             }
+
+            // Ctrl+Shift+P for Performance Overlay
+            if i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::P) {
+                self.perf_overlay.toggle();
+            }
         });
 
         // Top panel with title and directory selector
@@ -482,6 +495,7 @@ impl eframe::App for FsPromptApp {
                 if ui.button("Select Directory").clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_folder() {
                         self.selected_path = Some(path.clone());
+                        self.tree.set_ignore_patterns(&self.ignore_patterns);
                         self.tree.set_root(path.clone());
 
                         // Start watching the directory
@@ -804,6 +818,9 @@ impl eframe::App for FsPromptApp {
 
         // Show toast notifications
         self.toast_manager.show_ui(ctx);
+
+        // Show performance overlay
+        self.perf_overlay.show(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -847,6 +864,7 @@ mod tests {
             theme: "auto".to_string(),
             fs_watcher: FsWatcher::new(),
             files_changed: false,
+            perf_overlay: PerfOverlay::default(),
         };
 
         assert!(app.selected_path.is_none());
@@ -881,6 +899,7 @@ mod tests {
             theme: "auto".to_string(),
             fs_watcher: FsWatcher::new(),
             files_changed: false,
+            perf_overlay: PerfOverlay::default(),
         };
 
         assert_eq!(app.selected_path, Some(test_path));
@@ -912,6 +931,7 @@ mod tests {
             theme: "auto".to_string(),
             fs_watcher: FsWatcher::new(),
             files_changed: false,
+            perf_overlay: PerfOverlay::default(),
         };
 
         // Test that Debug is implemented correctly
