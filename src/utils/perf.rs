@@ -142,6 +142,7 @@ impl Drop for ScopedTimer<'_> {
 
         if let Some(budget) = self.budget {
             if elapsed > budget {
+                #[cfg(debug_assertions)]
                 eprintln!(
                     "⚠️  Performance WARNING: {} took {:?}, budget was {:?} ({}x over)",
                     self.name,
@@ -150,11 +151,6 @@ impl Drop for ScopedTimer<'_> {
                     elapsed.as_secs_f64() / budget.as_secs_f64()
                 );
             }
-        }
-
-        #[cfg(debug_assertions)]
-        {
-            println!("⏱️  {}: {:?}", self.name, elapsed);
         }
     }
 }

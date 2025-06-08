@@ -56,8 +56,8 @@ pub fn scan_directory_parallel(
     if !ignore_patterns.is_empty() {
         let mut override_builder = OverrideBuilder::new(root);
         for pattern in ignore_patterns {
-            if let Err(e) = override_builder.add(&format!("!{pattern}")) {
-                eprintln!("Invalid ignore pattern '{pattern}': {e}");
+            if let Err(_e) = override_builder.add(&format!("!{pattern}")) {
+                // Silently ignore invalid patterns to avoid debug output
             }
         }
         if let Ok(overrides) = override_builder.build() {
