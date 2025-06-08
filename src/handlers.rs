@@ -1,7 +1,7 @@
 //! Event handlers for keyboard shortcuts and directory selection
 
 use crate::app::FsPromptApp;
-use crate::core::types::{CanonicalPath, Theme};
+use crate::core::types::CanonicalPath;
 use eframe::egui;
 
 impl FsPromptApp {
@@ -101,17 +101,5 @@ impl FsPromptApp {
                 ));
             }
         }
-    }
-
-    /// Handles theme selection
-    pub fn handle_theme_selection(&mut self, _ctx: &egui::Context, theme: Theme) {
-        self.state.config.ui.theme = theme;
-        self.save_config();
-        let message = match theme {
-            Theme::System => "Theme set to Auto",
-            Theme::Light => "Theme set to Light",
-            Theme::Dark => "Theme set to Dark",
-        };
-        self.toast_manager.success(message);
     }
 }

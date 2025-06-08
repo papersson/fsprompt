@@ -1125,9 +1125,9 @@ pub enum Theme {
     /// Light theme
     Light,
     /// Dark theme
+    #[default]
     Dark,
     /// Follow system
-    #[default]
     System,
 }
 

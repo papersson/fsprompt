@@ -28,7 +28,6 @@ pub mod watcher;
 pub mod workers;
 
 use app::{FsPromptApp, TabView};
-use core::types::Theme;
 use ui::{
     components::{Button, ButtonSize, ButtonVariant},
     header::AppHeader,
@@ -55,6 +54,9 @@ fn main() -> eframe::Result<()> {
 impl eframe::App for FsPromptApp {
     #[allow(clippy::too_many_lines)]
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // FIRST: Apply theme before ANY UI rendering
+        self.apply_theme_if_needed(ctx);
+
         // Record frame start for performance monitoring
         self.perf_overlay.frame_start();
 
@@ -71,31 +73,15 @@ impl eframe::App for FsPromptApp {
         // Global keyboard shortcuts
         self.handle_keyboard_shortcuts(ctx);
 
-        // Determine current theme mode and apply it
-        let dark_mode = match self.state.config.ui.theme {
-            Theme::Dark => true,
-            Theme::Light => false,
-            Theme::System => Self::prefers_dark_theme(),
-        };
-
-        // Apply theme on every frame to ensure immediate updates
-        UiTheme::apply_theme(ctx, dark_mode);
-
         // Show app header
         let mut directory_selected = false;
-        let mut theme_changed = None;
 
         AppHeader::new(&mut self.state, &mut self.icon_manager)
             .on_select_directory(|| directory_selected = true)
-            .on_theme_change(|theme| theme_changed = Some(theme))
             .show(ctx);
 
         if directory_selected {
             self.handle_directory_selection();
-        }
-
-        if let Some(new_theme) = theme_changed {
-            self.handle_theme_selection(ctx, new_theme);
         }
 
         // Show welcome screen if no directory is selected

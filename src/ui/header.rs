@@ -1,5 +1,5 @@
 use crate::{
-    core::types::{AppState, Theme},
+    core::types::AppState,
     ui::{
         components::{Button, ButtonSize, ButtonVariant},
         icons::{IconManager, IconType},
@@ -14,7 +14,6 @@ pub struct AppHeader<'a> {
     state: &'a mut AppState,
     icon_manager: &'a mut IconManager,
     on_select_directory: Option<Box<dyn FnOnce() + 'a>>,
-    on_theme_change: Option<Box<dyn FnOnce(Theme) + 'a>>,
 }
 
 impl<'a> AppHeader<'a> {
@@ -23,19 +22,12 @@ impl<'a> AppHeader<'a> {
             state,
             icon_manager,
             on_select_directory: None,
-            on_theme_change: None,
         }
     }
 
     /// Sets the callback to run when select directory is clicked
     pub fn on_select_directory(mut self, callback: impl FnOnce() + 'a) -> Self {
         self.on_select_directory = Some(Box::new(callback));
-        self
-    }
-
-    /// Sets the callback to run when theme changes
-    pub fn on_theme_change(mut self, callback: impl FnOnce(Theme) + 'a) -> Self {
-        self.on_theme_change = Some(Box::new(callback));
         self
     }
 
@@ -97,37 +89,6 @@ impl<'a> AppHeader<'a> {
                             );
                         }
                     }
-
-                    // Theme toggle on the right
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let mut theme_changed = None;
-                        ui.menu_button("🎨 Theme", |ui| {
-                            if ui
-                                .radio_value(&mut self.state.config.ui.theme, Theme::System, "Auto")
-                                .clicked()
-                            {
-                                theme_changed = Some(Theme::System);
-                            }
-                            if ui
-                                .radio_value(&mut self.state.config.ui.theme, Theme::Light, "Light")
-                                .clicked()
-                            {
-                                theme_changed = Some(Theme::Light);
-                            }
-                            if ui
-                                .radio_value(&mut self.state.config.ui.theme, Theme::Dark, "Dark")
-                                .clicked()
-                            {
-                                theme_changed = Some(Theme::Dark);
-                            }
-                        });
-
-                        if let Some(theme) = theme_changed {
-                            if let Some(callback) = self.on_theme_change.take() {
-                                callback(theme);
-                            }
-                        }
-                    });
                 });
             });
     }

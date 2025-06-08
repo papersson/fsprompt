@@ -14,7 +14,7 @@ pub struct OutputPanel<'a> {
 }
 
 impl<'a> OutputPanel<'a> {
-    pub fn new(app: &'a mut FsPromptApp) -> Self {
+    pub const fn new(app: &'a mut FsPromptApp) -> Self {
         Self { app }
     }
 

@@ -49,6 +49,8 @@ pub struct FsPromptApp {
     pub icon_manager: IconManager,
     /// Animation manager for smooth UI transitions
     pub animation_manager: AnimatedButtonManager,
+    /// Last applied theme to avoid redundant applications
+    last_applied_theme: Option<(Theme, bool)>, // (theme_setting, resolved_dark_mode)
 }
 
 /// Tab view for narrow/mobile layouts
@@ -63,7 +65,7 @@ pub enum TabView {
 impl FsPromptApp {
     /// Creates a new instance of the application
     #[must_use]
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let config_manager = ConfigManager::new();
         // Load configuration
         let loaded_config = config_manager.load();
@@ -73,14 +75,6 @@ impl FsPromptApp {
             config: loaded_config,
             ..AppState::default()
         };
-
-        // Apply theme based on config
-        let theme_str = match state.config.ui.theme {
-            Theme::Light => "light",
-            Theme::Dark => "dark",
-            Theme::System => "auto",
-        };
-        Self::apply_theme(cc, theme_str);
 
         // Save a copy of the loaded ignore patterns
         let saved_patterns = state.config.ignore_patterns.clone();
@@ -102,40 +96,33 @@ impl FsPromptApp {
             saved_ignore_patterns: saved_patterns,
             icon_manager: IconManager::new(),
             animation_manager: AnimatedButtonManager::new(),
+            last_applied_theme: None,
         }
     }
 
-    /// Apply theme to the UI at creation time
-    pub fn apply_theme(cc: &eframe::CreationContext<'_>, theme: &str) {
-        Self::apply_theme_to_ctx(&cc.egui_ctx, theme);
-    }
-
-    /// Apply theme to context
-    pub fn apply_theme_to_ctx(ctx: &egui::Context, theme: &str) {
-        let dark_mode = match theme {
-            "dark" => true,
-            "light" => false,
-            _ => Self::prefers_dark_theme(),
-        };
-        UiTheme::apply_theme(ctx, dark_mode);
-    }
-
-    /// Detect system theme preference
+    /// Detect system theme preference using dark-light crate
     pub fn prefers_dark_theme() -> bool {
-        // On macOS, we can check the system appearance
-        #[cfg(target_os = "macos")]
-        {
-            use std::process::Command;
-            if let Ok(output) = Command::new("defaults")
-                .args(["read", "-g", "AppleInterfaceStyle"])
-                .output()
-            {
-                return String::from_utf8_lossy(&output.stdout).trim() == "Dark";
-            }
+        match dark_light::detect() {
+            Ok(dark_light::Mode::Dark) => true,
+            Ok(dark_light::Mode::Light | dark_light::Mode::Unspecified) | Err(_) => false, // Default to light mode
         }
+    }
 
-        // Default to dark theme if we can't detect
-        true
+    /// Reset theme cache (for immediate theme changes)
+    pub fn reset_theme_cache(&mut self) {
+        self.last_applied_theme = None;
+    }
+
+    /// Apply theme if needed (only when it changes)
+    pub fn apply_theme_if_needed(&mut self, ctx: &egui::Context) {
+        // Always use dark mode for now
+        let dark_mode = true;
+
+        // Only apply on first run
+        if self.last_applied_theme.is_none() {
+            UiTheme::apply_theme(ctx, dark_mode);
+            self.last_applied_theme = Some((Theme::Dark, dark_mode));
+        }
     }
 
     /// Check for filesystem changes
@@ -393,6 +380,7 @@ mod tests {
             saved_ignore_patterns: Vec::new(),
             icon_manager: crate::ui::icons::IconManager::new(),
             animation_manager: crate::ui::components::AnimatedButtonManager::new(),
+            last_applied_theme: None,
         };
 
         assert!(app.state.root.is_none());
@@ -420,6 +408,7 @@ mod tests {
             saved_ignore_patterns: Vec::new(),
             icon_manager: crate::ui::icons::IconManager::new(),
             animation_manager: crate::ui::components::AnimatedButtonManager::new(),
+            last_applied_theme: None,
         };
 
         // Test that we can set output format
@@ -446,6 +435,7 @@ mod tests {
             saved_ignore_patterns: Vec::new(),
             icon_manager: crate::ui::icons::IconManager::new(),
             animation_manager: crate::ui::components::AnimatedButtonManager::new(),
+            last_applied_theme: None,
         };
 
         // Test that Debug is implemented correctly

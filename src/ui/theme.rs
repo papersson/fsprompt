@@ -578,6 +578,9 @@ impl Theme {
 
         ctx.set_visuals(visuals);
         ctx.set_style(style);
+
+        // Request repaint to ensure theme changes are immediately visible
+        ctx.request_repaint();
     }
 
     /// Legacy compatibility methods

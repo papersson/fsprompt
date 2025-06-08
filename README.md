@@ -19,15 +19,51 @@ A high-performance desktop application that generates "context prompts" from loc
 
 ## Installation
 
-**Pre-built binaries coming soon!**
+### Download Pre-built Binaries
 
-Currently, build from source:
+Download the latest release from the [GitHub Releases](https://github.com/patrikpersson/codext-rs/releases) page.
+
+#### macOS
+
+**Option 1: Package Installer (.pkg)**
+1. Download `fsprompt-v0.1.0-{arch}-apple-darwin.pkg` (where `{arch}` is `x86_64` for Intel or `aarch64` for Apple Silicon)
+2. Double-click the `.pkg` file
+3. You'll see a warning that the app is from an unidentified developer
+4. Right-click the `.pkg` file and select "Open" to bypass Gatekeeper
+5. Follow the installation wizard
+6. fsPrompt will be installed to `/usr/local/bin` and available in your terminal
+
+**Option 2: Manual Installation**
+1. Download `fsprompt-v0.1.0-{arch}-apple-darwin.tar.gz`
+2. Extract: `tar xzf fsprompt-v0.1.0-{arch}-apple-darwin.tar.gz`
+3. Move to PATH: `sudo mv fsprompt /usr/local/bin/`
+4. Make executable: `chmod +x /usr/local/bin/fsprompt`
+
+#### Windows
+
+**Option 1: Installer (.exe)**
+1. Download `fsprompt-v0.1.0-x86_64-pc-windows-msvc-setup.exe`
+2. Double-click the installer
+3. Windows SmartScreen may warn about an unrecognized app
+4. Click "More info" → "Run anyway"
+5. Follow the installation wizard
+6. The installer will add fsPrompt to your system PATH automatically
+
+**Option 2: Manual Installation**
+1. Download `fsprompt-v0.1.0-x86_64-pc-windows-msvc.zip`
+2. Extract the ZIP file
+3. Move `fsprompt.exe` to a directory in your PATH (e.g., `C:\Program Files\fsPrompt\`)
+4. Or add the directory containing `fsprompt.exe` to your PATH
+
+### Build from Source
+
+If you prefer to build from source:
 
 ```bash
 git clone https://github.com/patrikpersson/codext-rs.git
 cd codext-rs
 cargo build --release
-./target/release/fsprompt
+./target/release/fsprompt  # or .\target\release\fsprompt.exe on Windows
 ```
 
 ## How to Use
