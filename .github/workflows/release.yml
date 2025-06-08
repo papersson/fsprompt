@@ -8,6 +8,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: write
+
 jobs:
   create-release:
     name: Create Release
@@ -15,6 +18,9 @@ jobs:
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
@@ -22,7 +28,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
+          release_name: fsPrompt ${{ github.ref_name }}
+          body: |
+            ## fsPrompt ${{ github.ref_name }}
+            
+            ### Installation
+            
+            See the [README](https://github.com/patrikpersson/codext-rs#installation) for detailed installation instructions.
+            
+            #### macOS
+            - Intel: `fsprompt-${{ github.ref_name }}-x86_64-apple-darwin.pkg`
+            - Apple Silicon: `fsprompt-${{ github.ref_name }}-aarch64-apple-darwin.pkg`
+            
+            #### Windows
+            - Installer: `fsprompt-${{ github.ref_name }}-x86_64-pc-windows-msvc-setup.exe`
+            
+            ### Security Notes
+            
+            The binaries are unsigned, so you may see security warnings:
+            - **macOS**: Right-click the .pkg and select "Open" to bypass Gatekeeper
+            - **Windows**: Click "More info" → "Run anyway" in SmartScreen
           draft: false
           prerelease: false
 
