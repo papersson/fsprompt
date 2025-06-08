@@ -85,6 +85,7 @@ impl SerializableConfig {
                 font_size: 14.0,    // Default
                 show_hidden: false, // Default
                 include_tree: self.include_tree,
+                show_settings: false, // Default
             },
             ignore_patterns: if self.ignore_patterns.is_empty() {
                 Vec::new()

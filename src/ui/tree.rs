@@ -436,6 +436,32 @@ impl DirectoryTree {
         Some(current)
     }
 
+    /// Selects all files in the tree
+    pub fn select_all(&mut self) {
+        for root in &mut self.roots {
+            Self::set_selection_recursive(root, SelectionState::Checked);
+        }
+        self.needs_flattening = true;
+    }
+
+    /// Deselects all files in the tree
+    pub fn deselect_all(&mut self) {
+        for root in &mut self.roots {
+            Self::set_selection_recursive(root, SelectionState::Unchecked);
+        }
+        self.needs_flattening = true;
+    }
+
+    /// Recursively sets selection state
+    fn set_selection_recursive(node: &mut TreeNode, state: SelectionState) {
+        node.selection = state;
+        if node.children_loaded {
+            for child in &mut node.children {
+                Self::set_selection_recursive(child, state);
+            }
+        }
+    }
+
     /// Renders the tree UI with search filtering
     pub fn show_with_search(&mut self, ui: &mut egui::Ui, search_query: &str) {
         // Rebuild flattened view if needed

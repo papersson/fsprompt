@@ -857,6 +857,8 @@ pub struct OutputState {
     pub tokens: Option<TokenCount>,
     /// Is generation in progress
     pub generating: bool,
+    /// Estimated tokens for current selection (real-time)
+    pub estimated_tokens: Option<usize>,
 }
 
 /// Application configuration
@@ -1079,6 +1081,9 @@ pub struct UiConfig {
     pub show_hidden: bool,
     /// Include directory tree in output
     pub include_tree: bool,
+    /// Show advanced settings panel
+    #[serde(default)]
+    pub show_settings: bool,
 }
 
 impl Default for UiConfig {
@@ -1088,6 +1093,7 @@ impl Default for UiConfig {
             font_size: 12.0,
             show_hidden: false,
             include_tree: false,
+            show_settings: false,
         }
     }
 }
@@ -1232,9 +1238,9 @@ mod tests {
             .left_pane_ratio(0.4)
             .build();
 
-        assert_eq!(window.width, 1920.0);
-        assert_eq!(window.height, 1080.0);
-        assert_eq!(window.left_pane_ratio, 0.4);
+        assert!((window.width - 1920.0).abs() < f32::EPSILON);
+        assert!((window.height - 1080.0).abs() < f32::EPSILON);
+        assert!((window.left_pane_ratio - 0.4).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1243,6 +1249,6 @@ mod tests {
             .left_pane_ratio(1.5) // Out of range
             .build();
 
-        assert_eq!(window.left_pane_ratio, 1.0); // Clamped to max
+        assert!((window.left_pane_ratio - 1.0).abs() < f32::EPSILON); // Clamped to max
     }
 }

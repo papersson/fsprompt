@@ -137,6 +137,14 @@ impl eframe::App for FsPromptApp {
             });
         } else {
             // Normal side-by-side layout for wide windows
+            // First, create the action bar at the bottom
+            egui::TopBottomPanel::bottom("global_action_bar")
+                .exact_height(80.0)
+                .show(ctx, |ui| {
+                    self.show_action_bar(ui);
+                });
+
+            // Then create the side panels
             let panel_response = egui::SidePanel::left("left_panel")
                 .default_width(
                     self.state.config.window.left_pane_ratio * ctx.available_rect().width(),
@@ -144,7 +152,7 @@ impl eframe::App for FsPromptApp {
                 .width_range(UiTheme::SIDEBAR_MIN_WIDTH..=UiTheme::SIDEBAR_MAX_WIDTH)
                 .resizable(true)
                 .show(ctx, |ui| {
-                    self.show_files_panel(ui);
+                    self.show_files_content(ui);
                 });
 
             // Update panel width ratio if resized

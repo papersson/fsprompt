@@ -22,6 +22,7 @@ impl FsPromptApp {
                 && i.key_pressed(egui::Key::G)
                 && !self.state.output.generating
                 && self.state.root.is_some()
+                && !self.tree.get_selected_files().is_empty()
             {
                 self.generate_output();
             }
@@ -55,6 +56,25 @@ impl FsPromptApp {
             // Ctrl+Shift+P for Performance Overlay
             if i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::P) {
                 self.perf_overlay.toggle();
+            }
+
+            // Ctrl+A for Select All (when in file tree context)
+            if i.modifiers.ctrl && i.key_pressed(egui::Key::A) && self.state.root.is_some() {
+                self.tree.select_all();
+                self.state.output.estimated_tokens = Some(self.estimate_tokens_for_selection());
+                self.record_state();
+            }
+
+            // Ctrl+D for Deselect All
+            if i.modifiers.ctrl && i.key_pressed(egui::Key::D) && self.state.root.is_some() {
+                self.tree.deselect_all();
+                self.state.output.estimated_tokens = Some(0);
+                self.record_state();
+            }
+
+            // Ctrl+Comma for Settings toggle
+            if i.modifiers.ctrl && i.key_pressed(egui::Key::Comma) {
+                self.state.config.ui.show_settings = !self.state.config.ui.show_settings;
             }
         });
     }

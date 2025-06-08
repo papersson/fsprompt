@@ -1,306 +1,336 @@
 //! UI rendering logic for the main application
 
 use crate::app::FsPromptApp;
-use crate::core::types::{OutputFormat, Theme, TokenLevel};
+use crate::core::types::{OutputFormat, TokenLevel};
 use crate::ui::{TextEmphasis, Theme as UiTheme};
 use crate::workers::WorkerCommand;
 use eframe::egui;
 
 impl FsPromptApp {
-    /// Renders the files panel UI
-    pub fn show_files_panel(&mut self, ui: &mut egui::Ui) {
-        // Use a scrollable area for controls to ensure everything is visible
-        egui::TopBottomPanel::top("file_controls")
-            .resizable(true)
-            .default_height(350.0)
-            .height_range(300.0..=500.0)
-            .show_inside(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.add_space(UiTheme::SPACING_MD);
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new("Files & Directories").heading());
-                            ui.add_space(UiTheme::SPACING_MD);
+    /// Shows just the action bar (for global positioning)
+    #[allow(clippy::too_many_lines)]
+    pub fn show_action_bar(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(4.0);
+            // Real-time stats
+            ui.horizontal(|ui| {
+                let selected_count = self.tree.get_selected_files().len();
+                let token_estimate = self.estimate_tokens_for_selection();
 
-                            // Format selection
-                            ui.horizontal(|ui| {
-                                ui.label("Output format:");
-                                ui.radio_value(
-                                    &mut self.state.output.format,
-                                    OutputFormat::Xml,
-                                    "XML",
-                                );
-                                ui.radio_value(
-                                    &mut self.state.output.format,
-                                    OutputFormat::Markdown,
-                                    "Markdown",
-                                );
-                            });
+                // Selection info
+                ui.label(
+                    egui::RichText::new(format!("📁 {selected_count} files selected")).color(
+                        UiTheme::text_color(Self::prefers_dark_theme(), TextEmphasis::Secondary),
+                    ),
+                );
 
-                            // Include tree checkbox
-                            ui.checkbox(
-                                &mut self.state.config.ui.include_tree,
-                                "Include directory tree in output",
-                            );
+                ui.separator();
 
-                            // Ignore patterns
-                            ui.vertical(|ui| {
-                                ui.label("Ignore patterns:");
+                // Token count with color coding
+                let (token_color, token_label) = if token_estimate < 10_000 {
+                    (UiTheme::SUCCESS, "Low")
+                } else if token_estimate < 50_000 {
+                    (UiTheme::WARNING, "Medium")
+                } else {
+                    (UiTheme::ERROR, "High")
+                };
 
-                                // Pattern list with remove buttons
-                                let mut patterns_to_remove = Vec::new();
-                                ui.group(|ui| {
-                                    ui.set_width(ui.available_width());
+                ui.colored_label(
+                    token_color,
+                    format!(
+                        "🔢 ~{} tokens ({})",
+                        format_token_count(token_estimate),
+                        token_label
+                    ),
+                );
 
-                                    if self.state.config.ignore_patterns.is_empty() {
-                                        // Determine dark mode
-                                        let dark_mode = match self.state.config.ui.theme {
-                                            Theme::Dark => true,
-                                            Theme::Light => false,
-                                            Theme::System => Self::prefers_dark_theme(),
-                                        };
-                                        ui.colored_label(
-                                            UiTheme::text_color(dark_mode, TextEmphasis::Secondary),
-                                            "No patterns configured",
-                                        );
-                                    } else {
-                                        for (idx, pattern) in
-                                            self.state.config.ignore_patterns.iter().enumerate()
-                                        {
-                                            ui.horizontal(|ui| {
-                                                ui.label(pattern);
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        if ui.small_button("✕").clicked() {
-                                                            patterns_to_remove.push(idx);
-                                                        }
-                                                    },
-                                                );
-                                            });
-                                        }
-                                    }
-                                });
+                ui.separator();
 
-                                // Remove patterns that were marked for deletion
-                                for &idx in patterns_to_remove.iter().rev() {
-                                    self.state.config.ignore_patterns.remove(idx);
-                                }
-
-                                // Add new pattern input
-                                ui.add_space(UiTheme::SPACING_SM);
-                                ui.horizontal(|ui| {
-                                    ui.label("Add pattern:");
-                                    let response = ui
-                                        .text_edit_singleline(&mut self.new_pattern_input)
-                                        .on_hover_text("Enter a pattern (e.g., *.log, temp/*, _*)");
-
-                                    // Add pattern on Enter key
-                                    if response.lost_focus()
-                                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                        && !self.new_pattern_input.trim().is_empty()
-                                    {
-                                        self.state
-                                            .config
-                                            .ignore_patterns
-                                            .push(self.new_pattern_input.trim().to_string());
-                                        self.new_pattern_input.clear();
-                                        response.request_focus();
-                                    }
-
-                                    if ui.button("Add").clicked()
-                                        && !self.new_pattern_input.trim().is_empty()
-                                    {
-                                        self.state
-                                            .config
-                                            .ignore_patterns
-                                            .push(self.new_pattern_input.trim().to_string());
-                                        self.new_pattern_input.clear();
-                                    }
-                                });
-
-                                // Action buttons
-                                ui.add_space(UiTheme::SPACING_SM);
-                                ui.horizontal(|ui| {
-                                    // Track if patterns have been modified
-                                    let patterns_modified = self.state.config.ignore_patterns
-                                        != self.saved_ignore_patterns;
-
-                                    // Reset button
-                                    if ui.button("Reset to Defaults").clicked() {
-                                        self.state.config.ignore_patterns = vec![
-                                            ".*".to_string(),
-                                            "node_modules".to_string(),
-                                            "__pycache__".to_string(),
-                                            "target".to_string(),
-                                            "build".to_string(),
-                                            "dist".to_string(),
-                                            "_*".to_string(),
-                                        ];
-                                        self.toast_manager.info("Reset to default ignore patterns");
-                                    }
-
-                                    // Save button - only enabled if patterns have been modified
-                                    ui.add_enabled_ui(patterns_modified, |ui| {
-                                        if ui.button("Save").clicked() {
-                                            // Update the tree with new patterns
-                                            self.tree.set_ignore_patterns(
-                                                &self.state.config.ignore_patterns.join(","),
-                                            );
-
-                                            // Save configuration
-                                            self.save_config();
-
-                                            // Update saved patterns to match current
-                                            self.saved_ignore_patterns
-                                                .clone_from(&self.state.config.ignore_patterns);
-
-                                            self.toast_manager.success("Ignore patterns saved");
-
-                                            // If we have a root directory, refresh the tree
-                                            if let Some(root) = &self.state.root {
-                                                self.tree.set_root(root.clone());
-                                            }
-                                        }
-                                    });
-
-                                    // Visual indicator if patterns have been modified
-                                    if patterns_modified {
-                                        ui.colored_label(UiTheme::WARNING, "⚠ Unsaved changes");
-                                    }
-                                });
-                            });
-
-                            ui.add_space(UiTheme::SPACING_MD);
-
-                            // Search bar with modern styling
-                            ui.horizontal(|ui| {
-                                ui.label("🔍");
-                                ui.spacing_mut().text_edit_width = ui.available_width() - 60.0;
-                                let response = ui
-                                    .add(
-                                        egui::TextEdit::singleline(
-                                            &mut self.state.search.tree_search.query,
-                                        )
-                                        .desired_width(f32::INFINITY)
-                                        .hint_text("Search files..."),
-                                    )
-                                    .on_hover_text("Search for files and folders");
-
-                                // Clear button
-                                if !self.state.search.tree_search.query.is_empty()
-                                    && ui.small_button("✕").clicked()
-                                {
-                                    self.state.search.tree_search.query.clear();
-                                }
-
-                                // Focus on Ctrl+F
-                                if ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F)) {
-                                    response.request_focus();
-                                }
-                            });
-
-                            ui.add_space(UiTheme::SPACING_MD);
-
-                            // Show refresh notification if files have changed
-                            if self.files_changed {
-                                ui.horizontal(|ui| {
-                                    ui.colored_label(
-                                        UiTheme::WARNING,
-                                        "⚠️ Files have changed since last generation",
-                                    );
-                                    if ui.small_button("Refresh").clicked() {
-                                        // Reload the tree
-                                        if let Some(root) = &self.state.root {
-                                            self.tree.set_root(root.clone());
-                                            self.files_changed = false;
-                                            self.toast_manager.success("Directory refreshed");
-                                        }
-                                    }
-                                });
-                                ui.add_space(UiTheme::SPACING_MD);
-                            }
-
-                            // Generate button - make it prominent
-                            ui.add_space(UiTheme::SPACING_SM);
-                            ui.horizontal_centered(|ui| {
-                                let button_enabled =
-                                    !self.state.output.generating && self.state.root.is_some();
-                                let generate_button = egui::Button::new("🚀 Generate")
-                                    .min_size(egui::vec2(120.0, UiTheme::BUTTON_HEIGHT));
-
-                                if ui
-                                    .add_enabled(button_enabled, generate_button)
-                                    .on_hover_text("Generate output (Ctrl+G)")
-                                    .clicked()
-                                {
-                                    self.generate_output();
-                                }
-
-                                if self.state.output.generating {
-                                    ui.spinner();
-
-                                    if let Some((stage, progress)) = &self.current_progress {
-                                        let stage_text = match stage {
-                                            crate::workers::ProgressStage::ScanningFiles => {
-                                                "Scanning files"
-                                            }
-                                            crate::workers::ProgressStage::ReadingFiles => {
-                                                "Reading files"
-                                            }
-                                            crate::workers::ProgressStage::BuildingOutput => {
-                                                "Building output"
-                                            }
-                                        };
-                                        ui.label(format!(
-                                            "{}: {}/{} ({:.0}%)",
-                                            stage_text,
-                                            progress.current(),
-                                            progress.total(),
-                                            progress.percentage()
-                                        ));
-                                    } else {
-                                        ui.label("Starting...");
-                                    }
-
-                                    if ui.button("Cancel").clicked() {
-                                        let _ = self.worker.send_command(WorkerCommand::Cancel);
-                                    }
-                                } else if self.state.root.is_none() {
-                                    ui.label("Select a directory first");
-                                } else {
-                                    ui.label("Select files to include");
-                                }
-                            });
-
-                            ui.add_space(UiTheme::SPACING_MD);
-
-                            // Show error message if any
-                            if let Some(error) = &self.error_message {
-                                ui.colored_label(UiTheme::ERROR, format!("⚠️ {error}"));
-                                ui.add_space(UiTheme::SPACING_MD);
-                            }
-                        });
-                    });
+                // Output format toggle (compact)
+                ui.label("Format:");
+                if ui
+                    .selectable_label(self.state.output.format == OutputFormat::Xml, "XML")
+                    .clicked()
+                {
+                    self.state.output.format = OutputFormat::Xml;
+                }
+                ui.label("|");
+                if ui
+                    .selectable_label(
+                        self.state.output.format == OutputFormat::Markdown,
+                        "Markdown",
+                    )
+                    .clicked()
+                {
+                    self.state.output.format = OutputFormat::Markdown;
+                }
             });
 
-        // Now use CentralPanel for the tree - this guarantees it gets remaining space
+            ui.add_space(2.0);
+
+            // Primary actions
+            ui.horizontal(|ui| {
+                let selected_count = self.tree.get_selected_files().len();
+                let button_enabled = !self.state.output.generating
+                    && self.state.root.is_some()
+                    && selected_count > 0;
+
+                // Generate button - Primary CTA
+                let generate_button = egui::Button::new("🚀 Generate")
+                    .min_size(egui::vec2(140.0, 32.0))
+                    .fill(if button_enabled {
+                        UiTheme::accent_color(Self::prefers_dark_theme())
+                    } else {
+                        egui::Color32::GRAY
+                    });
+
+                if ui
+                    .add_enabled(button_enabled, generate_button)
+                    .on_hover_text(if button_enabled {
+                        "Generate output (Ctrl+G)"
+                    } else if self.state.root.is_none() {
+                        "Select a directory first"
+                    } else if self.tree.get_selected_files().is_empty() {
+                        "Select files to include"
+                    } else {
+                        "Generating..."
+                    })
+                    .clicked()
+                {
+                    self.generate_output();
+                }
+
+                // Secondary actions
+                if self.state.output.content.is_some() {
+                    ui.separator();
+
+                    if ui
+                        .button("📋 Copy")
+                        .on_hover_text("Copy to clipboard (Ctrl+C)")
+                        .clicked()
+                    {
+                        self.copy_to_clipboard();
+                    }
+
+                    if ui
+                        .button("💾 Save")
+                        .on_hover_text("Save to file (Ctrl+S)")
+                        .clicked()
+                    {
+                        self.save_to_file();
+                    }
+                }
+
+                // Progress indicator
+                if self.state.output.generating {
+                    ui.separator();
+                    ui.spinner();
+
+                    if let Some((stage, progress)) = &self.current_progress {
+                        let stage_text = match stage {
+                            crate::workers::ProgressStage::ScanningFiles => "Scanning",
+                            crate::workers::ProgressStage::ReadingFiles => "Reading",
+                            crate::workers::ProgressStage::BuildingOutput => "Building",
+                        };
+                        ui.label(format!("{stage_text}: {:.0}%", progress.percentage()));
+                    }
+
+                    if ui.small_button("Cancel").clicked() {
+                        let _ = self.worker.send_command(WorkerCommand::Cancel);
+                    }
+                }
+
+                // Settings button (right-aligned)
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("⚙ Settings").clicked() {
+                        self.state.config.ui.show_settings = !self.state.config.ui.show_settings;
+                    }
+                });
+            });
+        });
+    }
+
+    /// Shows the file tree and settings content  
+    #[allow(clippy::too_many_lines)]
+    pub fn show_files_content(&mut self, ui: &mut egui::Ui) {
+        // Collapsible settings panel
+        if self.state.config.ui.show_settings {
+            egui::TopBottomPanel::top("settings_panel")
+                .resizable(false)
+                .show_inside(ui, |ui| {
+                    ui.add_space(UiTheme::SPACING_SM);
+                    ui.collapsing("⚙ Advanced Settings", |ui| {
+                        // Include tree checkbox
+                        ui.checkbox(
+                            &mut self.state.config.ui.include_tree,
+                            "Include directory tree in output",
+                        );
+
+                        ui.separator();
+
+                        // Ignore patterns in collapsible section
+                        ui.collapsing("Ignore Patterns", |ui| {
+                            // Compact pattern display
+                            egui::ScrollArea::vertical()
+                                .max_height(100.0)
+                                .show(ui, |ui| {
+                                    let mut patterns_to_remove = Vec::new();
+                                    for (idx, pattern) in
+                                        self.state.config.ignore_patterns.iter().enumerate()
+                                    {
+                                        ui.horizontal(|ui| {
+                                            ui.label(pattern);
+                                            if ui.small_button("×").clicked() {
+                                                patterns_to_remove.push(idx);
+                                            }
+                                        });
+                                    }
+                                    for &idx in patterns_to_remove.iter().rev() {
+                                        self.state.config.ignore_patterns.remove(idx);
+                                    }
+                                });
+
+                            // Compact add pattern input
+                            ui.horizontal(|ui| {
+                                let response = ui.add(
+                                    egui::TextEdit::singleline(&mut self.new_pattern_input)
+                                        .hint_text("Add pattern (e.g., *.log)")
+                                        .desired_width(150.0),
+                                );
+
+                                let add_pattern = |app: &mut Self| {
+                                    if !app.new_pattern_input.trim().is_empty() {
+                                        app.state
+                                            .config
+                                            .ignore_patterns
+                                            .push(app.new_pattern_input.trim().to_string());
+                                        app.new_pattern_input.clear();
+                                    }
+                                };
+
+                                if response.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                {
+                                    add_pattern(self);
+                                    response.request_focus();
+                                }
+
+                                if ui.small_button("+").clicked() {
+                                    add_pattern(self);
+                                }
+                            });
+
+                            // Preset patterns
+                            ui.horizontal(|ui| {
+                                ui.label("Presets:");
+                                if ui.small_button("Common").clicked() {
+                                    self.state.config.ignore_patterns = vec![
+                                        ".*".to_string(),
+                                        "node_modules".to_string(),
+                                        "__pycache__".to_string(),
+                                        "target".to_string(),
+                                        "build".to_string(),
+                                        "dist".to_string(),
+                                    ];
+                                    self.apply_patterns();
+                                }
+                                if ui.small_button("Minimal").clicked() {
+                                    self.state.config.ignore_patterns =
+                                        vec![".*".to_string(), "node_modules".to_string()];
+                                    self.apply_patterns();
+                                }
+                                if ui.small_button("Clear").clicked() {
+                                    self.state.config.ignore_patterns.clear();
+                                    self.apply_patterns();
+                                }
+                            });
+                        });
+                    });
+                    ui.add_space(UiTheme::SPACING_SM);
+                });
+        }
+
+        // Main content area with file tree
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            // Search bar at the top
+            ui.horizontal(|ui| {
+                ui.add_space(UiTheme::SPACING_SM);
+                ui.label("🔍");
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.state.search.tree_search.query)
+                        .desired_width(ui.available_width() - 80.0)
+                        .hint_text("Search files... (Ctrl+F)"),
+                );
+
+                if !self.state.search.tree_search.query.is_empty() && ui.small_button("×").clicked() {
+                    self.state.search.tree_search.query.clear();
+                }
+
+                // Keyboard shortcut
+                if ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F)) {
+                    response.request_focus();
+                }
+            });
+
+            ui.separator();
+
+            // File changes notification
+            if self.files_changed {
+                ui.horizontal(|ui| {
+                    ui.add_space(UiTheme::SPACING_SM);
+                    ui.colored_label(UiTheme::WARNING, "⚠ Files changed");
+                    if ui.small_button("Refresh").clicked() {
+                        if let Some(root) = &self.state.root {
+                            self.tree.set_root(root.clone());
+                            self.files_changed = false;
+                            self.toast_manager.success("Directory refreshed");
+                        }
+                    }
+                });
+            }
+
+            // Error display
+            if let Some(error) = &self.error_message {
+                ui.horizontal(|ui| {
+                    ui.add_space(UiTheme::SPACING_SM);
+                    ui.colored_label(UiTheme::ERROR, format!("⚠ {error}"));
+                });
+            }
+
+            ui.add_space(UiTheme::SPACING_SM);
             // Track selection state before showing tree
             let snapshot_before = self.capture_snapshot();
 
             // The tree now has all remaining space
-            self.tree
-                .show_with_search(ui, &self.state.search.tree_search.query);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    self.tree
+                        .show_with_search(ui, &self.state.search.tree_search.query);
+                });
 
             // Check if selection changed and record state
             let snapshot_after = self.capture_snapshot();
             if snapshot_before.selected_files != snapshot_after.selected_files {
                 self.record_state();
+                // Update real-time token count when selection changes
+                self.state.output.estimated_tokens = Some(self.estimate_tokens_for_selection());
             }
+        });
+    }
+    
+    /// Renders the complete files panel (for tab/narrow view)
+    pub fn show_files_panel(&mut self, ui: &mut egui::Ui) {
+        // Fixed bottom action bar
+        egui::TopBottomPanel::bottom("local_action_bar")
+            .exact_height(80.0)
+            .show_inside(ui, |ui| {
+                self.show_action_bar(ui);
+            });
+        
+        // File content takes remaining space
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            self.show_files_content(ui);
         });
     }
 
@@ -434,5 +464,41 @@ impl FsPromptApp {
                     }
                 });
         });
+    }
+
+    /// Estimates token count for current selection
+    pub fn estimate_tokens_for_selection(&self) -> usize {
+        let selected_files = self.tree.get_selected_files();
+        // Rough estimate: 1 token per 4 characters
+        selected_files
+            .iter()
+            .filter_map(|path| std::fs::metadata(path).ok())
+            .map(|metadata| (metadata.len() / 4) as usize)
+            .sum()
+    }
+
+    /// Applies current ignore patterns to the tree
+    fn apply_patterns(&mut self) {
+        self.tree
+            .set_ignore_patterns(&self.state.config.ignore_patterns.join(","));
+        self.save_config();
+        self.saved_ignore_patterns
+            .clone_from(&self.state.config.ignore_patterns);
+        if let Some(root) = &self.state.root {
+            self.tree.set_root(root.clone());
+        }
+        self.toast_manager.success("Patterns applied");
+    }
+}
+
+/// Formats token count with K/M suffixes
+#[allow(clippy::cast_precision_loss)]
+fn format_token_count(count: usize) -> String {
+    if count >= 1_000_000 {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}K", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
     }
 }
