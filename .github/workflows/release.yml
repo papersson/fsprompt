@@ -168,6 +168,7 @@ jobs:
           AppVersion=$VERSION
           DefaultDirName={autopf}\fsPrompt
           DefaultGroupName=fsPrompt
+          OutputDir=.
           OutputBaseFilename=fsprompt-v$VERSION-x86_64-pc-windows-msvc-setup
           Compression=lzma
           SolidCompression=yes
@@ -192,7 +193,7 @@ jobs:
           begin
             if RegQueryStringValue(HKLM, EnvironmentKey, 'Path', Path) then
             begin
-              Path := StringReplace(Path, ';' + DirToRemove, '', [rfReplaceAll]);
+              Path := StringChangeEx(Path, ';' + DirToRemove, '');
               RegWriteStringValue(HKLM, EnvironmentKey, 'Path', Path);
             end;
           end;
@@ -215,8 +216,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./fsprompt-v${{ github.ref_name }}-${{ matrix.target }}.pkg
-          asset_name: fsprompt-v${{ github.ref_name }}-${{ matrix.target }}.pkg
+          asset_path: ./fsprompt-v0.1.0-${{ matrix.target }}.pkg
+          asset_name: fsprompt-${{ github.ref_name }}-${{ matrix.target }}.pkg
           asset_content_type: application/x-newton-compatible-pkg
 
       - name: Upload Windows Installer
@@ -226,6 +227,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./Output/fsprompt-v${{ github.ref_name }}-x86_64-pc-windows-msvc-setup.exe
-          asset_name: fsprompt-v${{ github.ref_name }}-x86_64-pc-windows-msvc-setup.exe
+          asset_path: ./fsprompt-v0.1.0-x86_64-pc-windows-msvc-setup.exe
+          asset_name: fsprompt-${{ github.ref_name }}-x86_64-pc-windows-msvc-setup.exe
           asset_content_type: application/vnd.microsoft.portable-executable

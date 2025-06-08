@@ -2,7 +2,7 @@
 ; This creates an unsigned Windows installer
 
 #define MyAppName "fsPrompt"
-#define MyAppVersion GetFileVersion("..\..\..\target\x86_64-pc-windows-msvc\release\fsprompt.exe")
+#define MyAppVersion "0.1.0"
 #define MyAppPublisher "fsPrompt Contributors"
 #define MyAppURL "https://github.com/patrikpersson/codext-rs"
 #define MyAppExeName "fsprompt.exe"
@@ -22,7 +22,7 @@ LicenseFile=..\..\LICENSE
 InfoBeforeFile=..\..\README.md
 OutputDir=..\..\dist
 OutputBaseFilename=fsprompt-v{#MyAppVersion}-x86_64-pc-windows-msvc-setup
-SetupIconFile=..\..\assets\icon.ico
+; SetupIconFile=..\..\assets\icon.ico ; Uncomment when icon is available
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -47,7 +47,7 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const
