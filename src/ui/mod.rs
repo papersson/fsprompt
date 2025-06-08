@@ -1,6 +1,13 @@
 //! User interface components for fsPrompt
 
+pub mod animations;
 pub mod app_ui;
+pub mod components;
+pub mod footer;
+pub mod header;
+pub mod icons;
+pub mod logo;
+pub mod output_panel;
 /// Theme and styling constants
 pub mod theme;
 pub mod toast;

@@ -7,7 +7,11 @@ use glob::Pattern;
 use std::collections::{HashMap, HashSet};
 
 use crate::core::types::{CanonicalPath, FileSize};
-use crate::ui::Theme;
+use crate::ui::{
+    components::{Button, ButtonSize, ButtonVariant},
+    icons::{IconManager, IconType},
+    Theme,
+};
 
 // Using SelectionState from core::types
 pub use crate::core::types::SelectionState;
@@ -259,6 +263,8 @@ pub struct DirectoryTree {
     flattened_nodes: Vec<FlattenedNode>,
     /// Whether the flattened view needs rebuilding
     needs_flattening: bool,
+    /// Animation states for expand/collapse
+    expansion_animations: HashMap<Vec<usize>, f32>,
 }
 
 impl DirectoryTree {
@@ -271,6 +277,7 @@ impl DirectoryTree {
             ignore_patterns: Vec::new(),
             flattened_nodes: Vec::new(),
             needs_flattening: true,
+            expansion_animations: HashMap::new(),
         }
     }
 
@@ -326,8 +333,8 @@ impl DirectoryTree {
     }
 
     /// Renders the tree UI
-    pub fn show(&mut self, ui: &mut egui::Ui) {
-        self.show_with_search(ui, "");
+    pub fn show(&mut self, ui: &mut egui::Ui, icon_manager: &mut IconManager) {
+        self.show_with_search(ui, "", icon_manager);
     }
 
     /// Flattens the tree into a linear list of visible nodes
@@ -463,7 +470,12 @@ impl DirectoryTree {
     }
 
     /// Renders the tree UI with search filtering
-    pub fn show_with_search(&mut self, ui: &mut egui::Ui, search_query: &str) {
+    pub fn show_with_search(
+        &mut self,
+        ui: &mut egui::Ui,
+        search_query: &str,
+        icon_manager: &mut IconManager,
+    ) {
         // Rebuild flattened view if needed
         if self.needs_flattening || !search_query.is_empty() {
             self.flatten_tree(search_query);
@@ -490,12 +502,13 @@ impl DirectoryTree {
             return;
         }
 
-        // DEBUG: Add a visual indicator that we're about to render
-        ui.label(format!("🌳 Tree with {total_rows} items"));
-        ui.separator();
+        // Remove debug label - clean UI
 
         // Use egui's built-in row virtualization for uniform height items
         let row_height = Theme::ROW_HEIGHT;
+
+        // Set zero item spacing for compact tree
+        ui.spacing_mut().item_spacing.y = 0.0;
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -510,49 +523,230 @@ impl DirectoryTree {
                     }
 
                     let flat_node = self.flattened_nodes[row].clone();
+
+                    // Debug: print node info to identify empty rows
+                    if flat_node.name.is_empty() || flat_node.name.trim().is_empty() {
+                        eprintln!("DEBUG: Empty node at row {}: {:?}", row, flat_node);
+                    }
+
                     #[allow(clippy::cast_precision_loss)]
                     let indent = flat_node.depth as f32 * Theme::INDENT_SIZE;
 
-                    ui.horizontal(|ui| {
-                        ui.add_space(indent);
+                    // Get design tokens
+                    let tokens = Theme::design_tokens(ui.visuals().dark_mode);
 
-                        // Expansion toggle for directories
-                        if flat_node.is_dir {
-                            let arrow = if flat_node.is_expanded { "▼" } else { "▶" };
-                            if ui.small_button(arrow).clicked() {
-                                if let Some(node) = self.get_node_by_path_mut(&flat_node.node_path)
-                                {
-                                    node.expanded = !node.expanded;
-                                    if node.expanded && !node.children_loaded {
-                                        node.load_children_with_patterns(&patterns);
-                                    }
-                                    any_expansion_changed = true;
-                                }
-                            }
-                        } else {
-                            // Spacer for files
-                            ui.add_space(
-                                ui.spacing().button_padding.x.mul_add(2.0, Theme::ICON_SIZE),
+                    // Create a horizontal layout that fills the row height exactly
+                    ui.push_id(row, |ui| {
+                        // Pre-calculate the row rect
+                        let row_rect = egui::Rect::from_min_size(
+                            ui.cursor().min,
+                            egui::vec2(ui.available_width(), row_height),
+                        );
+
+                        // Check if this row is hovered
+                        let is_hovered = ui.rect_contains_pointer(row_rect);
+
+                        // Draw hover background first
+                        if is_hovered {
+                            ui.painter().rect_filled(
+                                row_rect,
+                                egui::CornerRadius::ZERO,
+                                tokens.colors.surface_container.gamma_multiply(0.5),
                             );
                         }
 
-                        // Tri-state checkbox
-                        let (mut checked, new_state) = match flat_node.selection {
-                            SelectionState::Unchecked => (false, SelectionState::Checked),
-                            SelectionState::Checked => (true, SelectionState::Unchecked),
-                            SelectionState::Indeterminate => (true, SelectionState::Checked),
-                        };
+                        ui.horizontal(|ui| {
+                            // Set exact height for this row
+                            ui.set_min_height(row_height);
+                            ui.set_max_height(row_height);
+                            ui.add_space(indent);
 
-                        if ui.checkbox(&mut checked, "").clicked() {
-                            if let Some(node) = self.get_node_by_path_mut(&flat_node.node_path) {
-                                node.set_selection_with_patterns(new_state, &patterns);
-                                any_selection_changed = true;
+                            // Expansion toggle for directories
+                            if flat_node.is_dir {
+                                let arrow_icon = if flat_node.is_expanded {
+                                    IconType::ChevronDown
+                                } else {
+                                    IconType::ChevronRight
+                                };
+
+                                let expand_button = Button::icon_only(arrow_icon)
+                                    .size(ButtonSize::Small)
+                                    .variant(ButtonVariant::Ghost)
+                                    .tooltip(if flat_node.is_expanded {
+                                        "Collapse"
+                                    } else {
+                                        "Expand"
+                                    });
+
+                                if expand_button.show(ui, icon_manager).clicked() {
+                                    if let Some(node) =
+                                        self.get_node_by_path_mut(&flat_node.node_path)
+                                    {
+                                        node.expanded = !node.expanded;
+                                        if node.expanded && !node.children_loaded {
+                                            node.load_children_with_patterns(&patterns);
+                                        }
+                                        any_expansion_changed = true;
+
+                                        // Start animation
+                                        let target = if node.expanded { 1.0 } else { 0.0 };
+                                        self.expansion_animations
+                                            .insert(flat_node.node_path.clone(), target);
+                                    }
+                                }
+
+                                // Animate the chevron rotation
+                                let animation_id = ui.id().with(&flat_node.node_path);
+                                let _rotation = ui.ctx().animate_value_with_time(
+                                    animation_id,
+                                    if flat_node.is_expanded {
+                                        std::f32::consts::PI / 2.0
+                                    } else {
+                                        0.0
+                                    },
+                                    0.2,
+                                );
+                            } else {
+                                // Spacer for files - smaller
+                                ui.add_space(20.0);
                             }
-                        }
 
-                        // Icon and name
-                        let icon = if flat_node.is_dir { "📁" } else { "📄" };
-                        ui.label(format!("{icon} {}", flat_node.name));
+                            // Custom tri-state checkbox - smaller
+                            let checkbox_size = 14.0;
+                            let checkbox_rect = egui::Rect::from_min_size(
+                                ui.cursor().min,
+                                egui::vec2(checkbox_size, checkbox_size),
+                            );
+
+                            let checkbox_response =
+                                ui.allocate_rect(checkbox_rect, egui::Sense::click());
+
+                            // Animate checkbox state
+                            let checkbox_anim_id = ui.id().with(("checkbox", &flat_node.node_path));
+                            let check_animation = ui.ctx().animate_value_with_time(
+                                checkbox_anim_id,
+                                match flat_node.selection {
+                                    SelectionState::Checked => 1.0,
+                                    SelectionState::Indeterminate => 0.5,
+                                    SelectionState::Unchecked => 0.0,
+                                },
+                                0.15,
+                            );
+
+                            // Draw custom checkbox
+                            let checkbox_color = if checkbox_response.hovered() {
+                                tokens.colors.primary
+                            } else {
+                                tokens.colors.outline
+                            };
+
+                            // Background with animated fill
+                            let bg_color = if check_animation > 0.0 {
+                                tokens.colors.primary.gamma_multiply(check_animation)
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            };
+
+                            // Draw checkbox background
+                            if check_animation > 0.0 {
+                                ui.painter()
+                                    .rect_filled(checkbox_rect, tokens.radius.xs, bg_color);
+                            }
+
+                            // Draw checkbox border
+                            ui.painter().rect_stroke(
+                                checkbox_rect,
+                                tokens.radius.xs,
+                                egui::Stroke::new(1.5, checkbox_color),
+                                egui::epaint::StrokeKind::Inside,
+                            );
+
+                            // Checkbox content
+                            match flat_node.selection {
+                                SelectionState::Checked => {
+                                    // Draw checkmark - scaled for smaller checkbox
+                                    let check_points = vec![
+                                        checkbox_rect.min + egui::vec2(2.5, 7.0),
+                                        checkbox_rect.min + egui::vec2(5.0, 9.5),
+                                        checkbox_rect.min + egui::vec2(11.0, 3.5),
+                                    ];
+                                    ui.painter().add(egui::Shape::line(
+                                        check_points,
+                                        egui::Stroke::new(1.5, egui::Color32::WHITE),
+                                    ));
+                                }
+                                SelectionState::Indeterminate => {
+                                    // Draw dash
+                                    let dash_rect = checkbox_rect.shrink(4.0);
+                                    ui.painter().rect_filled(
+                                        egui::Rect::from_center_size(
+                                            checkbox_rect.center(),
+                                            egui::vec2(dash_rect.width(), 2.0),
+                                        ),
+                                        egui::CornerRadius::ZERO,
+                                        tokens.colors.primary,
+                                    );
+                                }
+                                SelectionState::Unchecked => {
+                                    // Empty checkbox
+                                }
+                            }
+
+                            // Handle click
+                            if checkbox_response.clicked() {
+                                let new_state = match flat_node.selection {
+                                    SelectionState::Unchecked => SelectionState::Checked,
+                                    SelectionState::Checked => SelectionState::Unchecked,
+                                    SelectionState::Indeterminate => SelectionState::Checked,
+                                };
+
+                                if let Some(node) = self.get_node_by_path_mut(&flat_node.node_path)
+                                {
+                                    node.set_selection_with_patterns(new_state, &patterns);
+                                    any_selection_changed = true;
+                                }
+                            }
+
+                            ui.add_space(2.0); // Minimal spacing
+
+                            // Icon and name with visual hierarchy
+                            let (text_style, icon_tint) = if flat_node.is_dir {
+                                (
+                                    egui::RichText::new(&flat_node.name)
+                                        .size(12.0) // Smaller text
+                                        .strong()
+                                        .color(tokens.colors.on_surface),
+                                    Some(tokens.colors.primary),
+                                )
+                            } else {
+                                (
+                                    egui::RichText::new(&flat_node.name)
+                                        .size(12.0) // Smaller text
+                                        .color(tokens.colors.on_surface_variant),
+                                    None,
+                                )
+                            };
+
+                            // Show icon with proper sizing
+                            let icon_type = if flat_node.is_dir {
+                                if flat_node.is_expanded {
+                                    IconType::FolderOpen
+                                } else {
+                                    IconType::Folder
+                                }
+                            } else {
+                                Self::get_file_icon_type(&flat_node.name)
+                            };
+
+                            icon_manager.show_icon(
+                                ui,
+                                icon_type,
+                                crate::ui::icons::IconSize::Small,
+                                icon_tint,
+                            );
+                            ui.add_space(2.0); // Minimal spacing between icon and text
+                            ui.label(text_style);
+                        });
                     });
                 }
 
@@ -768,6 +962,31 @@ impl DirectoryTree {
         for child in &mut node.children {
             Self::restore_node_state_recursive(child, selected_files, expanded_dirs);
         }
+    }
+
+    /// Get appropriate icon type for file based on extension
+    fn get_file_icon_type(filename: &str) -> IconType {
+        std::path::Path::new(filename)
+            .extension()
+            .map_or(IconType::File, |extension| {
+                match extension.to_str().unwrap_or("").to_lowercase().as_str() {
+                    // Code files
+                    "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "go" | "cpp" | "c" | "h"
+                    | "java" | "kt" | "swift" => IconType::Code,
+                    // Config files
+                    "toml" | "json" | "yaml" | "yml" | "xml" | "ini" | "cfg" | "conf" => {
+                        IconType::Config
+                    }
+                    // Documentation
+                    "md" | "txt" | "rst" | "adoc" => IconType::Document,
+                    // Image files
+                    "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" => IconType::Image,
+                    // Archive files
+                    "zip" | "tar" | "gz" | "rar" | "7z" => IconType::Archive,
+                    // Default file icon
+                    _ => IconType::File,
+                }
+            })
     }
 }
 

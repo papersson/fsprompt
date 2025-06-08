@@ -4,6 +4,8 @@ use crate::core::types::{
     AppState, FileCount, HistorySize, OutputFormat, PatternString, ProgressCount, Theme,
 };
 use crate::state::{ConfigManager, HistoryManager, SelectionSnapshot};
+use crate::ui::components::AnimatedButtonManager;
+use crate::ui::icons::IconManager;
 use crate::ui::toast::ToastManager;
 use crate::ui::Theme as UiTheme;
 use crate::utils::perf::PerfOverlay;
@@ -43,6 +45,10 @@ pub struct FsPromptApp {
     pub new_pattern_input: String,
     /// Saved ignore patterns for tracking changes
     pub saved_ignore_patterns: Vec<String>,
+    /// Icon manager for SVG icons
+    pub icon_manager: IconManager,
+    /// Animation manager for smooth UI transitions
+    pub animation_manager: AnimatedButtonManager,
 }
 
 /// Tab view for narrow/mobile layouts
@@ -94,6 +100,8 @@ impl FsPromptApp {
             active_tab: TabView::Files,
             new_pattern_input: String::new(),
             saved_ignore_patterns: saved_patterns,
+            icon_manager: IconManager::new(),
+            animation_manager: AnimatedButtonManager::new(),
         }
     }
 
@@ -383,6 +391,8 @@ mod tests {
             active_tab: TabView::Files,
             new_pattern_input: String::new(),
             saved_ignore_patterns: Vec::new(),
+            icon_manager: crate::ui::icons::IconManager::new(),
+            animation_manager: crate::ui::components::AnimatedButtonManager::new(),
         };
 
         assert!(app.state.root.is_none());
@@ -408,6 +418,8 @@ mod tests {
             active_tab: TabView::Files,
             new_pattern_input: String::new(),
             saved_ignore_patterns: Vec::new(),
+            icon_manager: crate::ui::icons::IconManager::new(),
+            animation_manager: crate::ui::components::AnimatedButtonManager::new(),
         };
 
         // Test that we can set output format
@@ -432,6 +444,8 @@ mod tests {
             active_tab: TabView::Files,
             new_pattern_input: String::new(),
             saved_ignore_patterns: Vec::new(),
+            icon_manager: crate::ui::icons::IconManager::new(),
+            animation_manager: crate::ui::components::AnimatedButtonManager::new(),
         };
 
         // Test that Debug is implemented correctly

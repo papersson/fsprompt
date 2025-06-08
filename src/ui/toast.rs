@@ -18,11 +18,12 @@ pub enum ToastVariant {
 
 impl ToastVariant {
     /// Gets the color for this variant
-    const fn color(self) -> egui::Color32 {
+    fn color(self, dark_mode: bool) -> egui::Color32 {
+        let tokens = Theme::design_tokens(dark_mode);
         match self {
-            Self::Success => Theme::SUCCESS,
-            Self::Warning => Theme::WARNING,
-            Self::Error => Theme::ERROR,
+            Self::Success => tokens.colors.success,
+            Self::Warning => tokens.colors.warning,
+            Self::Error => tokens.colors.error,
         }
     }
 
@@ -158,33 +159,36 @@ impl ToastManager {
             let mut should_close = false;
 
             // Clone values we need in the closure
-            let variant_color = toast.variant.color();
+            let variant = toast.variant;
             let variant_icon = toast.variant.icon();
             let message = toast.message.clone();
             let remaining_fraction = toast.remaining_fraction();
 
-            // Position at bottom-right corner
+            // Position at bottom-right corner, adjusted for action bar
             egui::Area::new(egui::Id::new("toast_area"))
                 .anchor(
                     egui::Align2::RIGHT_BOTTOM,
-                    egui::vec2(-Theme::SPACING_MD, -Theme::SPACING_MD),
+                    egui::vec2(-Theme::SPACING_MD, -70.0), // Moved up to avoid action bar overlap
                 )
                 .interactable(false)
                 .show(ctx, |ui| {
-                    // Container with shadow
+                    let tokens = Theme::design_tokens(ui.visuals().dark_mode);
+
+                    // Container with enhanced shadow
                     egui::Frame::new()
-                        .fill(ui.style().visuals.panel_fill)
-                        .shadow(egui::epaint::Shadow {
-                            offset: [0, 2],
-                            blur: 8,
-                            spread: 0,
-                            color: egui::Color32::from_black_alpha(40),
-                        })
-                        .corner_radius(Theme::RADIUS_LG)
-                        .inner_margin(Theme::SPACING_MD)
+                        .fill(tokens.colors.surface)
+                        .shadow(tokens.shadows.md)
+                        .corner_radius(tokens.radius.lg)
+                        .inner_margin(egui::Margin::same({
+                            #[allow(clippy::cast_possible_truncation)]
+                            {
+                                tokens.spacing.lg as i8
+                            }
+                        }))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                // Icon
+                                // Icon - get color within the UI context
+                                let variant_color = variant.color(ui.visuals().dark_mode);
                                 ui.colored_label(variant_color, variant_icon);
 
                                 // Message
@@ -196,8 +200,12 @@ impl ToastManager {
                                 }
                             });
 
-                            // Progress bar
+                            // Progress bar with rounded corners
                             let progress_height = 3.0;
+                            let full_progress_rect = egui::Rect::from_min_size(
+                                ui.cursor().min,
+                                egui::vec2(ui.available_width(), progress_height),
+                            );
                             let progress_rect = egui::Rect::from_min_size(
                                 ui.cursor().min,
                                 egui::vec2(
@@ -205,10 +213,22 @@ impl ToastManager {
                                     progress_height,
                                 ),
                             );
+
+                            // Get variant color again for progress bar
+                            let variant_color = variant.color(ui.visuals().dark_mode);
+
+                            // Background track
+                            ui.painter().rect_filled(
+                                full_progress_rect,
+                                tokens.radius.full,
+                                variant_color.gamma_multiply(0.15),
+                            );
+
+                            // Progress fill
                             ui.painter().rect_filled(
                                 progress_rect,
-                                egui::CornerRadius::ZERO,
-                                variant_color.gamma_multiply(0.3),
+                                tokens.radius.full,
+                                variant_color.gamma_multiply(0.4),
                             );
 
                             // Add space for progress bar

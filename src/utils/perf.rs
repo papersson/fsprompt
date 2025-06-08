@@ -292,23 +292,26 @@ impl PerfOverlay {
             .fixed_pos(pos)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
-                // Semi-transparent background
+                // Use theme-aware colors
+                let tokens = crate::ui::Theme::design_tokens(ui.visuals().dark_mode);
+
+                // Semi-transparent background with theme colors
                 let frame = egui::Frame::window(ui.style())
-                    .fill(egui::Color32::from_rgba_premultiplied(30, 30, 30, 220))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
+                    .fill(tokens.colors.surface.gamma_multiply(0.9))
+                    .stroke(egui::Stroke::new(1.0, tokens.colors.outline_variant));
 
                 frame.show(ui, |ui| {
                     ui.set_min_width(panel_width);
                     ui.label("Performance (Dev)");
                     ui.separator();
 
-                    // FPS with color coding
+                    // FPS with color coding using theme tokens
                     let fps_color = if stats.avg_fps >= 120.0 {
-                        egui::Color32::GREEN
+                        tokens.colors.success
                     } else if stats.avg_fps >= 60.0 {
-                        egui::Color32::YELLOW
+                        tokens.colors.warning
                     } else {
-                        egui::Color32::RED
+                        tokens.colors.error
                     };
 
                     ui.colored_label(fps_color, format!("FPS: {:.0}", stats.avg_fps));
@@ -319,11 +322,11 @@ impl PerfOverlay {
                     ui.label(format!("Frame P99: {:.1}ms", stats.p99_ms));
 
                     let max_color = if stats.max_ms > 16.7 {
-                        egui::Color32::RED
+                        tokens.colors.error
                     } else if stats.max_ms > 8.3 {
-                        egui::Color32::YELLOW
+                        tokens.colors.warning
                     } else {
-                        egui::Color32::GREEN
+                        tokens.colors.success
                     };
 
                     ui.colored_label(max_color, format!("Frame Max: {:.1}ms", stats.max_ms));
@@ -332,11 +335,11 @@ impl PerfOverlay {
 
                     // Memory usage
                     let mem_color = if mem_growth > 100.0 {
-                        egui::Color32::RED
+                        tokens.colors.error
                     } else if mem_growth > 50.0 {
-                        egui::Color32::YELLOW
+                        tokens.colors.warning
                     } else {
-                        egui::Color32::GREEN
+                        tokens.colors.success
                     };
 
                     ui.colored_label(mem_color, format!("Mem Growth: {mem_growth:.1}MB"));

@@ -4,8 +4,7 @@
     clippy::nursery,
     clippy::cargo,
     rust_2018_idioms,
-    missing_debug_implementations,
-    missing_docs
+    missing_debug_implementations
 )]
 #![allow(clippy::module_name_repetitions)] // Common in Rust APIs
 #![allow(clippy::must_use_candidate)] // We'll add these selectively

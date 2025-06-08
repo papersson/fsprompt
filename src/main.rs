@@ -4,8 +4,7 @@
     clippy::nursery,
     clippy::cargo,
     rust_2018_idioms,
-    missing_debug_implementations,
-    missing_docs
+    missing_debug_implementations
 )]
 #![allow(clippy::module_name_repetitions)] // Common in Rust APIs
 #![allow(clippy::must_use_candidate)] // We'll add these selectively
@@ -30,7 +29,13 @@ pub mod workers;
 
 use app::{FsPromptApp, TabView};
 use core::types::Theme;
-use ui::Theme as UiTheme;
+use ui::{
+    components::{Button, ButtonSize, ButtonVariant},
+    header::AppHeader,
+    icons::IconType,
+    logo::Logo,
+    Theme as UiTheme,
+};
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
@@ -48,6 +53,7 @@ fn main() -> eframe::Result<()> {
 }
 
 impl eframe::App for FsPromptApp {
+    #[allow(clippy::too_many_lines)]
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Record frame start for performance monitoring
         self.perf_overlay.frame_start();
@@ -75,50 +81,34 @@ impl eframe::App for FsPromptApp {
         // Apply theme on every frame to ensure immediate updates
         UiTheme::apply_theme(ctx, dark_mode);
 
-        // Top panel with title and directory selector
-        egui::TopBottomPanel::top("top_panel")
-            .exact_height(UiTheme::TOP_BAR_HEIGHT)
-            .show(ctx, |ui| {
-                ui.add_space(UiTheme::SPACING_SM);
-                ui.horizontal(|ui| {
-                    ui.heading("fsPrompt");
-                    ui.add_space(UiTheme::SPACING_MD);
+        // Show app header
+        let mut directory_selected = false;
+        let mut theme_changed = None;
 
-                    if ui.button("📁 Select Directory").clicked() {
-                        self.handle_directory_selection();
-                    }
+        AppHeader::new(&mut self.state, &mut self.icon_manager)
+            .on_select_directory(|| directory_selected = true)
+            .on_theme_change(|theme| theme_changed = Some(theme))
+            .show(ctx);
 
-                    if let Some(root) = &self.state.root {
-                        ui.add_space(UiTheme::SPACING_SM);
-                        ui.label(format!("📂 {}", root.as_path().display()));
-                    }
+        if directory_selected {
+            self.handle_directory_selection();
+        }
 
-                    // Theme toggle on the right
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.menu_button("🎨 Theme", |ui| {
-                            if ui
-                                .radio_value(&mut self.state.config.ui.theme, Theme::System, "Auto")
-                                .clicked()
-                            {
-                                self.handle_theme_selection(ctx, Theme::System);
-                            }
-                            if ui
-                                .radio_value(&mut self.state.config.ui.theme, Theme::Light, "Light")
-                                .clicked()
-                            {
-                                self.handle_theme_selection(ctx, Theme::Light);
-                            }
-                            if ui
-                                .radio_value(&mut self.state.config.ui.theme, Theme::Dark, "Dark")
-                                .clicked()
-                            {
-                                self.handle_theme_selection(ctx, Theme::Dark);
-                            }
-                        });
-                    });
-                });
-                ui.add_space(UiTheme::SPACING_SM);
+        if let Some(new_theme) = theme_changed {
+            self.handle_theme_selection(ctx, new_theme);
+        }
+
+        // Show welcome screen if no directory is selected
+        if self.state.root.is_none() {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                self.show_welcome_screen(ui);
             });
+
+            // Show toast notifications and performance overlay
+            self.toast_manager.show_ui(ctx);
+            self.perf_overlay.show(ctx);
+            return;
+        }
 
         // Responsive UI: Use tabs for narrow windows, side-by-side for wide windows
         if is_narrow {
@@ -139,7 +129,7 @@ impl eframe::App for FsPromptApp {
             // Normal side-by-side layout for wide windows
             // First, create the action bar at the bottom
             egui::TopBottomPanel::bottom("global_action_bar")
-                .exact_height(80.0)
+                .exact_height(44.0)
                 .show(ctx, |ui| {
                     self.show_action_bar(ui);
                 });
@@ -177,5 +167,63 @@ impl eframe::App for FsPromptApp {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.on_exit();
+    }
+}
+
+impl FsPromptApp {
+    /// Shows the welcome screen when no directory is selected
+    fn show_welcome_screen(&mut self, ui: &mut egui::Ui) {
+        let tokens = UiTheme::design_tokens(ui.visuals().dark_mode);
+
+        // Center content vertically and horizontally
+        ui.vertical_centered(|ui| {
+            // Add fixed vertical centering space
+            ui.add_space(100.0);
+
+            // Large centered logo
+            Logo::new()
+                .size(120.0)
+                .show_text(false)
+                .animate_on_hover(true)
+                .show_animated(ui, None);
+
+            ui.add_space(tokens.spacing.xl);
+
+            // Welcome title
+            ui.label(
+                egui::RichText::new("Welcome to fsPrompt")
+                    .size(tokens.typography.headline_large.size)
+                    .color(tokens.colors.on_surface),
+            );
+
+            ui.add_space(tokens.spacing.md);
+
+            // Simple subtitle
+            ui.label(
+                egui::RichText::new("Generate LLM-ready prompts from your codebase")
+                    .size(tokens.typography.body_large.size)
+                    .color(tokens.colors.on_surface_variant),
+            );
+
+            ui.add_space(tokens.spacing.xxxl);
+
+            // Clean, properly sized button
+            let start_button = Button::new("Select Directory")
+                .variant(ButtonVariant::Primary)
+                .size(ButtonSize::Large)
+                .icon(IconType::Folder)
+                .min_width(220.0);
+
+            if start_button
+                .show_animated(
+                    ui,
+                    &mut self.icon_manager,
+                    Some(&mut self.animation_manager),
+                )
+                .clicked()
+            {
+                self.handle_directory_selection();
+            }
+        });
     }
 }

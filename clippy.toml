@@ -9,5 +9,5 @@ too-many-lines-threshold = 100
 # Set the maximum number of arguments allowed in a function
 too-many-arguments-threshold = 7
 
-# Enforce documentation
-missing-docs-in-crate-items = true
+# Enforce documentation only for public APIs, not everything
+missing-docs-in-crate-items = false

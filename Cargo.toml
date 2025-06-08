@@ -16,6 +16,7 @@ crossbeam = "0.8.4"
 dirs = "5.0.1"
 eframe = "0.31.1"
 egui = "0.31.1"
+egui_extras = { version = "0.31.1", features = ["svg"] }
 fuzzy-matcher = "0.3.7"
 glob = "0.3.2"
 # Platform-specific dependencies below
