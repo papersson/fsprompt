@@ -159,9 +159,10 @@ jobs:
           # Install Inno Setup
           choco install innosetup -y
           
-          # Create installer script
+          # Get version from Cargo.toml
           $VERSION = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
           
+          # Create installer script
           @"
           [Setup]
           AppName=fsPrompt
@@ -173,6 +174,7 @@ jobs:
           Compression=lzma
           SolidCompression=yes
           ArchitecturesInstallIn64BitMode=x64
+          ChangesEnvironment=yes
           
           [Files]
           Source: "target\x86_64-pc-windows-msvc\release\fsprompt.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -180,28 +182,54 @@ jobs:
           [Icons]
           Name: "{group}\fsPrompt"; Filename: "{app}\fsprompt.exe"
           
+          [Tasks]
+          Name: "addtopath"; Description: "Add fsPrompt to PATH"; GroupDescription: "Additional options:"
+          
           [Registry]
-          Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Flags: preservestringtype
+          Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddToPath('{app}')
           
           [Code]
-          const
-            EnvironmentKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
-          
-          procedure RemoveDirFromPath(DirToRemove: string);
+          function NeedsAddToPath(Param: string): boolean;
           var
-            Path: string;
+            OrigPath: string;
+            AppDir: string;
           begin
-            if RegQueryStringValue(HKLM, EnvironmentKey, 'Path', Path) then
-            begin
-              Path := StringChangeEx(Path, ';' + DirToRemove, '');
-              RegWriteStringValue(HKLM, EnvironmentKey, 'Path', Path);
+            AppDir := ExpandConstant(Param);
+            if not RegQueryStringValue(HKEY_LOCAL_MACHINE,
+              'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
+              'Path', OrigPath)
+            then begin
+              Result := True;
+              exit;
             end;
+            { Check if already in path }
+            Result := Pos(';' + AppDir + ';', ';' + OrigPath + ';') = 0;
+            if Result then
+              Result := Pos(';' + AppDir + '\;', ';' + OrigPath + ';') = 0;
           end;
           
           procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+          var
+            AppDir: string;
+            Path: string;
           begin
             if CurUninstallStep = usPostUninstall then
-              RemoveDirFromPath(ExpandConstant('{app}'));
+            begin
+              AppDir := ExpandConstant('{app}');
+              if RegQueryStringValue(HKEY_LOCAL_MACHINE,
+                'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
+                'Path', Path) then
+              begin
+                { Remove both with and without trailing backslash }
+                StringChangeEx(Path, ';' + AppDir + ';', ';', True);
+                StringChangeEx(Path, ';' + AppDir + '\;', ';', True);
+                StringChangeEx(Path, ';' + AppDir, '', True);
+                StringChangeEx(Path, ';' + AppDir + '\', '', True);
+                RegWriteStringValue(HKEY_LOCAL_MACHINE,
+                  'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
+                  'Path', Path);
+              end;
+            end;
           end;
           "@ | Out-File -FilePath installer.iss -Encoding UTF8
           
