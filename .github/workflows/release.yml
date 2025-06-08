@@ -59,10 +59,10 @@ jobs:
         include:
           # macOS builds
           - target: x86_64-apple-darwin
-            os: macos-12
+            os: macos-latest
             name: fsprompt-x86_64-apple-darwin
           - target: aarch64-apple-darwin
-            os: macos-12
+            os: macos-latest
             name: fsprompt-aarch64-apple-darwin
           # Windows build
           - target: x86_64-pc-windows-msvc
@@ -113,10 +113,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-12
+          - os: macos-latest
             arch: x86_64
             target: x86_64-apple-darwin
-          - os: macos-12
+          - os: macos-latest
             arch: aarch64
             target: aarch64-apple-darwin
           - os: windows-latest
@@ -137,7 +137,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build macOS Package
-        if: matrix.os == 'macos-12'
+        if: startsWith(matrix.os, 'macos')
         run: |
           # Create package structure
           mkdir -p pkg/usr/local/bin
@@ -238,7 +238,7 @@ jobs:
         shell: pwsh
 
       - name: Upload macOS Package
-        if: matrix.os == 'macos-12'
+        if: startsWith(matrix.os, 'macos')
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
