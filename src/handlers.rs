@@ -62,11 +62,29 @@ impl FsPromptApp {
     /// Handles directory selection dialog
     pub fn handle_directory_selection(&mut self) {
         if let Some(path) = rfd::FileDialog::new().pick_folder() {
+            println!("DEBUG: Selected path: {}", path.display());
+
             if let Ok(canonical_path) = CanonicalPath::new(&path) {
+                println!(
+                    "DEBUG: Canonical path created: {}",
+                    canonical_path.as_path().display()
+                );
+
                 self.state.root = Some(canonical_path.clone());
                 self.tree
                     .set_ignore_patterns(&self.state.config.ignore_patterns.join(","));
                 self.tree.set_root(canonical_path.clone());
+
+                println!("DEBUG: Tree root set, calling debug_tree...");
+                // Debug the tree structure
+                if !self.tree.roots.is_empty() {
+                    println!(
+                        "DEBUG: Tree structure:\n{}",
+                        self.tree.roots[0].debug_tree(0)
+                    );
+                } else {
+                    println!("DEBUG: Tree roots is empty!");
+                }
 
                 // Start watching the directory
                 if let Err(e) = self.fs_watcher.watch(&canonical_path) {
@@ -79,7 +97,14 @@ impl FsPromptApp {
                     "Loaded {}",
                     path.file_name().unwrap_or_default().to_string_lossy()
                 ));
+            } else {
+                println!(
+                    "DEBUG: Failed to create canonical path for: {}",
+                    path.display()
+                );
             }
+        } else {
+            println!("DEBUG: No directory selected");
         }
     }
 

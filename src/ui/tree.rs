@@ -275,10 +275,9 @@ impl DirectoryTree {
         self.node_map.clear();
         self.needs_flattening = true;
 
-        if let Ok(mut root) = TreeNode::new(path) {
+        if let Ok(mut root) = TreeNode::new(path.clone()) {
             root.expanded = true;
             root.load_children_with_patterns(&self.ignore_patterns);
-
             self.roots.push(root);
         }
     }
@@ -334,21 +333,35 @@ impl DirectoryTree {
             return;
         }
 
+        let root = &self.roots[0];
+
+        // If root's children aren't loaded yet, nothing to show
+        if !root.children_loaded {
+            return;
+        }
+
+        // If the directory is empty, nothing to show
+        if root.children.is_empty() {
+            return;
+        }
+
         let matcher = if search_query.is_empty() {
             None
         } else {
             Some(SkimMatcherV2::default())
         };
 
-        // Flatten the tree recursively
-        Self::flatten_node_recursive(
-            &self.roots[0],
-            &mut self.flattened_nodes,
-            vec![0],
-            0,
-            search_query,
-            matcher.as_ref(),
-        );
+        // Flatten each child of the root directly, skipping the root node itself
+        for (index, child) in root.children.iter().enumerate() {
+            Self::flatten_node_recursive(
+                child,
+                &mut self.flattened_nodes,
+                vec![0, index], // Path that includes root (0) and child index
+                0,              // Start children at depth 0 for proper display
+                search_query,
+                matcher.as_ref(),
+            );
+        }
 
         self.needs_flattening = false;
     }
@@ -426,16 +439,36 @@ impl DirectoryTree {
 
     /// Renders the tree UI with search filtering
     pub fn show_with_search(&mut self, ui: &mut egui::Ui, search_query: &str) {
+
         // Rebuild flattened view if needed
         if self.needs_flattening || !search_query.is_empty() {
             self.flatten_tree(search_query);
         }
 
         let total_rows = self.flattened_nodes.len();
+
         if total_rows == 0 {
-            ui.label("No files to display");
+            // Provide more specific feedback based on the state
+            if self.roots.is_empty() {
+                ui.label("No directory selected");
+            } else {
+                let root = &self.roots[0];
+                if !root.children_loaded {
+                    ui.label("Loading directory contents...");
+                } else if root.children.is_empty() {
+                    ui.label("Directory is empty");
+                } else if !search_query.is_empty() {
+                    ui.label("No files match your search");
+                } else {
+                    ui.label("No files to display");
+                }
+            }
             return;
         }
+
+        // DEBUG: Add a visual indicator that we're about to render
+        ui.label(format!("🌳 Tree with {} items", total_rows));
+        ui.separator();
 
         // Use egui's built-in row virtualization for uniform height items
         let row_height = Theme::ROW_HEIGHT;
@@ -552,6 +585,7 @@ impl DirectoryTree {
                 }
             });
     }
+
 
     /// Updates parent selection states recursively based on children
     fn update_parent_states_recursive(node: &mut TreeNode) {

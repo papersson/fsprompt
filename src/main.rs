@@ -34,9 +34,8 @@ use ui::Theme as UiTheme;
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([800.0, 600.0])
-            .with_min_inner_size([640.0, 480.0])
-            .with_fullscreen(true),
+            .with_inner_size([1400.0, 900.0])
+            .with_min_inner_size([640.0, 480.0]),
         ..Default::default()
     };
 
