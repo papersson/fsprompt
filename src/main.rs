@@ -9,6 +9,7 @@
 )]
 #![allow(clippy::module_name_repetitions)] // Common in Rust APIs
 #![allow(clippy::must_use_candidate)] // We'll add these selectively
+#![allow(clippy::multiple_crate_versions)] // Transitive dependency conflicts we don't control
 
 //! fsPrompt - A high-performance filesystem prompt generator for LLMs
 //!
@@ -64,12 +65,15 @@ impl eframe::App for FsPromptApp {
         // Global keyboard shortcuts
         self.handle_keyboard_shortcuts(ctx);
 
-        // Determine current theme mode for styling
-        let _dark_mode = match self.state.config.ui.theme {
+        // Determine current theme mode and apply it
+        let dark_mode = match self.state.config.ui.theme {
             Theme::Dark => true,
             Theme::Light => false,
             Theme::System => Self::prefers_dark_theme(),
         };
+
+        // Apply theme on every frame to ensure immediate updates
+        UiTheme::apply_theme(ctx, dark_mode);
 
         // Top panel with title and directory selector
         egui::TopBottomPanel::top("top_panel")

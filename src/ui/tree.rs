@@ -34,7 +34,11 @@ pub struct TreeNode {
 }
 
 impl TreeNode {
-    /// Creates a new tree node from a CanonicalPath
+    /// Creates a new tree node from a `CanonicalPath`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path metadata cannot be accessed
     pub fn new(canonical_path: CanonicalPath) -> std::io::Result<Self> {
         let name = canonical_path.file_name().map_or_else(
             || canonical_path.as_path().to_string_lossy().to_string(),
@@ -44,14 +48,14 @@ impl TreeNode {
         let is_dir = canonical_path.as_path().is_dir();
 
         // Get file size if it's a file
-        let file_size = if !is_dir {
+        let file_size = if is_dir {
+            None
+        } else {
             canonical_path
                 .as_path()
                 .metadata()
                 .ok()
                 .map(|m| FileSize::from_bytes(m.len()))
-        } else {
-            None
         };
 
         Ok(Self {
@@ -80,7 +84,7 @@ impl TreeNode {
         self.children_loaded = true;
 
         if let Ok(entries) = std::fs::read_dir(self.canonical_path.as_path()) {
-            let mut children: Vec<TreeNode> = entries
+            let mut children: Vec<Self> = entries
                 .filter_map(Result::ok)
                 .filter_map(|entry| {
                     let path = entry.path();
@@ -95,7 +99,7 @@ impl TreeNode {
 
                     CanonicalPath::new(path)
                         .ok()
-                        .and_then(|cp| TreeNode::new(cp).ok())
+                        .and_then(|cp| Self::new(cp).ok())
                 })
                 .collect();
 
@@ -208,13 +212,14 @@ impl TreeNode {
         );
 
         if self.is_dir {
-            result.push_str(&format!(
-                "{}  (loaded: {}, expanded: {}, {} children)\n",
-                indent,
+            use std::fmt::Write;
+            let _ = writeln!(
+                result,
+                "{indent}  (loaded: {}, expanded: {}, {} children)",
                 self.children_loaded,
                 self.expanded,
                 self.children.len()
-            ));
+            );
         }
 
         for child in &self.children {
@@ -275,7 +280,7 @@ impl DirectoryTree {
         self.node_map.clear();
         self.needs_flattening = true;
 
-        if let Ok(mut root) = TreeNode::new(path.clone()) {
+        if let Ok(mut root) = TreeNode::new(path) {
             root.expanded = true;
             root.load_children_with_patterns(&self.ignore_patterns);
             self.roots.push(root);
@@ -286,7 +291,7 @@ impl DirectoryTree {
     pub fn set_ignore_patterns(&mut self, patterns_str: &str) {
         self.ignore_patterns = patterns_str
             .split(',')
-            .map(|s| s.trim())
+            .map(str::trim)
             .filter(|s| !s.is_empty())
             .filter_map(|pattern| Pattern::new(pattern).ok())
             .collect();
@@ -356,8 +361,8 @@ impl DirectoryTree {
             Self::flatten_node_recursive(
                 child,
                 &mut self.flattened_nodes,
-                vec![0, index], // Path that includes root (0) and child index
-                0,              // Start children at depth 0 for proper display
+                &[0, index], // Path that includes root (0) and child index
+                0,           // Start children at depth 0 for proper display
                 search_query,
                 matcher.as_ref(),
             );
@@ -370,23 +375,17 @@ impl DirectoryTree {
     fn flatten_node_recursive(
         node: &TreeNode,
         flattened: &mut Vec<FlattenedNode>,
-        node_path: Vec<usize>,
+        node_path: &[usize],
         depth: usize,
         search_query: &str,
         matcher: Option<&SkimMatcherV2>,
     ) {
         // Check if this node matches the search
-        let should_show = if let Some(matcher) = matcher {
-            let node_matches = matcher.fuzzy_match(&node.name, search_query).is_some();
-            let children_match = if node.is_dir {
-                Self::has_matching_child(node, search_query, matcher)
-            } else {
-                false
-            };
-            node_matches || children_match
-        } else {
-            true
-        };
+        #[allow(clippy::unnecessary_map_or)]
+        let should_show = matcher.map_or(true, |m| {
+            m.fuzzy_match(&node.name, search_query).is_some()
+                || (node.is_dir && Self::has_matching_child(node, search_query, m))
+        });
 
         if !should_show {
             return;
@@ -394,7 +393,7 @@ impl DirectoryTree {
 
         // Add this node to the flattened list
         flattened.push(FlattenedNode {
-            node_path: node_path.clone(),
+            node_path: node_path.to_vec(),
             depth,
             name: node.name.clone(),
             is_dir: node.is_dir,
@@ -405,12 +404,12 @@ impl DirectoryTree {
         // If expanded, add children
         if node.is_dir && node.expanded && node.children_loaded {
             for (i, child) in node.children.iter().enumerate() {
-                let mut child_path = node_path.clone();
+                let mut child_path = node_path.to_vec();
                 child_path.push(i);
                 Self::flatten_node_recursive(
                     child,
                     flattened,
-                    child_path,
+                    &child_path,
                     depth + 1,
                     search_query,
                     matcher,
@@ -439,7 +438,6 @@ impl DirectoryTree {
 
     /// Renders the tree UI with search filtering
     pub fn show_with_search(&mut self, ui: &mut egui::Ui, search_query: &str) {
-
         // Rebuild flattened view if needed
         if self.needs_flattening || !search_query.is_empty() {
             self.flatten_tree(search_query);
@@ -467,7 +465,7 @@ impl DirectoryTree {
         }
 
         // DEBUG: Add a visual indicator that we're about to render
-        ui.label(format!("🌳 Tree with {} items", total_rows));
+        ui.label(format!("🌳 Tree with {total_rows} items"));
         ui.separator();
 
         // Use egui's built-in row virtualization for uniform height items
@@ -486,6 +484,7 @@ impl DirectoryTree {
                     }
 
                     let flat_node = self.flattened_nodes[row].clone();
+                    #[allow(clippy::cast_precision_loss)]
                     let indent = flat_node.depth as f32 * Theme::INDENT_SIZE;
 
                     ui.horizontal(|ui| {
@@ -506,70 +505,28 @@ impl DirectoryTree {
                             }
                         } else {
                             // Spacer for files
-                            ui.add_space(ui.spacing().button_padding.x * 2.0 + Theme::ICON_SIZE);
+                            ui.add_space(
+                                ui.spacing().button_padding.x.mul_add(2.0, Theme::ICON_SIZE),
+                            );
                         }
 
                         // Tri-state checkbox
-                        let _selection_changed = match flat_node.selection {
-                            SelectionState::Unchecked => {
-                                if ui.checkbox(&mut false, "").clicked() {
-                                    if let Some(node) =
-                                        self.get_node_by_path_mut(&flat_node.node_path)
-                                    {
-                                        node.set_selection_with_patterns(
-                                            SelectionState::Checked,
-                                            &patterns,
-                                        );
-                                        any_selection_changed = true;
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
-                            }
-                            SelectionState::Checked => {
-                                if ui.checkbox(&mut true, "").clicked() {
-                                    if let Some(node) =
-                                        self.get_node_by_path_mut(&flat_node.node_path)
-                                    {
-                                        node.set_selection_with_patterns(
-                                            SelectionState::Unchecked,
-                                            &patterns,
-                                        );
-                                        any_selection_changed = true;
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
-                            }
-                            SelectionState::Indeterminate => {
-                                if ui.checkbox(&mut true, "").clicked() {
-                                    if let Some(node) =
-                                        self.get_node_by_path_mut(&flat_node.node_path)
-                                    {
-                                        node.set_selection_with_patterns(
-                                            SelectionState::Checked,
-                                            &patterns,
-                                        );
-                                        any_selection_changed = true;
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
-                            }
+                        let (mut checked, new_state) = match flat_node.selection {
+                            SelectionState::Unchecked => (false, SelectionState::Checked),
+                            SelectionState::Checked => (true, SelectionState::Unchecked),
+                            SelectionState::Indeterminate => (true, SelectionState::Checked),
                         };
+
+                        if ui.checkbox(&mut checked, "").clicked() {
+                            if let Some(node) = self.get_node_by_path_mut(&flat_node.node_path) {
+                                node.set_selection_with_patterns(new_state, &patterns);
+                                any_selection_changed = true;
+                            }
+                        }
 
                         // Icon and name
                         let icon = if flat_node.is_dir { "📁" } else { "📄" };
-                        ui.label(format!("{} {}", icon, flat_node.name));
+                        ui.label(format!("{icon} {}", flat_node.name));
                     });
                 }
 
@@ -585,7 +542,6 @@ impl DirectoryTree {
                 }
             });
     }
-
 
     /// Updates parent selection states recursively based on children
     fn update_parent_states_recursive(node: &mut TreeNode) {
@@ -642,7 +598,7 @@ impl DirectoryTree {
 
         // Only process children if this is a directory with loaded children
         if node.is_dir && node.children_loaded && !node.children.is_empty() {
-            let new_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+            let new_prefix = format!("{prefix}{}", if is_last { "    " } else { "│   " });
 
             let child_count = node.children.len();
             for (index, child) in node.children.iter().enumerate() {

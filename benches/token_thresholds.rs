@@ -31,12 +31,12 @@ fn create_realistic_project(
 
         // Create subdirectories
         for j in 0..dirs_per_level {
-            let subdir = dir_path.join(format!("module_{}", j));
+            let subdir = dir_path.join(format!("module_{j}"));
             fs::create_dir(&subdir).unwrap();
 
             // Create files
             for k in 0..files_per_dir {
-                let file_path = subdir.join(format!("file_{}.rs", k));
+                let file_path = subdir.join(format!("file_{k}.rs"));
                 let content = generate_realistic_code(avg_file_size);
                 fs::write(file_path, content).unwrap();
             }
@@ -50,10 +50,7 @@ fn create_realistic_project(
         fs::write(base_path.join(file), content).unwrap();
     }
 
-    println!(
-        "{}: Created {} files in {} levels",
-        name, num_files, max_depth
-    );
+    println!("{name}: Created {num_files} files in {max_depth} levels");
     temp_dir
 }
 
@@ -207,7 +204,7 @@ fn bench_20k_tokens(c: &mut Criterion) {
             }
 
             output.len()
-        })
+        });
     });
 
     group.finish();
@@ -244,7 +241,7 @@ fn bench_100k_tokens(c: &mut Criterion) {
             }
 
             output.len()
-        })
+        });
     });
 
     group.finish();
@@ -281,7 +278,7 @@ fn bench_200k_tokens(c: &mut Criterion) {
             }
 
             output.len()
-        })
+        });
     });
 
     group.finish();
@@ -300,11 +297,11 @@ fn bench_operations_by_scale(c: &mut Criterion) {
         let temp_dir = create_realistic_project(name, num_files, file_size, 6);
         let root_path = temp_dir.path().to_path_buf();
 
-        let mut group = c.benchmark_group(format!("operations_{}", name));
+        let mut group = c.benchmark_group(format!("operations_{name}"));
 
         // Benchmark directory scanning
         group.bench_function("scan_directory", |b| {
-            b.iter(|| scan_directory_parallel(&root_path, None, &[]))
+            b.iter(|| scan_directory_parallel(&root_path, None, &[]));
         });
 
         // Pre-collect file paths for file reading benchmark
@@ -317,7 +314,7 @@ fn bench_operations_by_scale(c: &mut Criterion) {
 
         // Benchmark file reading
         group.bench_function("read_files", |b| {
-            b.iter(|| read_files_parallel(&file_paths, 256 * 1024))
+            b.iter(|| read_files_parallel(&file_paths, 256 * 1024));
         });
 
         group.finish();

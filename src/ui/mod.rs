@@ -52,7 +52,10 @@ fn generate_tree_recursive(
     // Process directory children
     if path.is_dir() {
         if let Ok(entries) = std::fs::read_dir(path) {
-            let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+            let mut entries: Vec<_> = entries
+                .filter_map(std::result::Result::ok)
+                .map(|e| e.path())
+                .collect();
 
             // Sort entries: directories first, then alphabetically
             entries.sort_by(|a, b| match (a.is_dir(), b.is_dir()) {
@@ -66,7 +69,7 @@ fn generate_tree_recursive(
 
             for (index, entry) in entries.iter().enumerate() {
                 let is_last_child = index == entry_count - 1;
-                generate_tree_recursive(&entry, output, &new_prefix, is_last_child, depth + 1);
+                generate_tree_recursive(entry, output, &new_prefix, is_last_child, depth + 1);
             }
         }
     }

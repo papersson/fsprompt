@@ -18,7 +18,7 @@ pub struct FrameTimer {
 impl Default for FrameTimer {
     fn default() -> Self {
         Self {
-            frame_times: Arc::new([(); 120].map(|_| AtomicU64::new(0))),
+            frame_times: Arc::new([(); 120].map(|()| AtomicU64::new(0))),
             position: Arc::new(AtomicUsize::new(0)),
             last_frame: Arc::new(AtomicU64::new(0)),
         }
@@ -31,8 +31,10 @@ impl FrameTimer {
         // Use a stable epoch for timing
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_else(|_| std::time::Duration::ZERO)
-            .as_micros() as u64;
+            .unwrap_or(std::time::Duration::ZERO)
+            .as_micros()
+            .try_into()
+            .unwrap_or(u64::MAX);
 
         let last = self.last_frame.swap(now, Ordering::Relaxed);
 
@@ -63,13 +65,20 @@ impl FrameTimer {
 
         FrameStats {
             avg_fps: if sum > 0 {
-                (count as f64 * 1_000_000.0) / (sum as f64)
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    (count as f64 * 1_000_000.0) / (sum as f64)
+                }
             } else {
                 0.0
             },
+            #[allow(clippy::cast_precision_loss)]
             p50_ms: times[count / 2] as f64 / 1000.0,
+            #[allow(clippy::cast_precision_loss)]
             p95_ms: times[count * 95 / 100] as f64 / 1000.0,
+            #[allow(clippy::cast_precision_loss)]
             p99_ms: times[count * 99 / 100] as f64 / 1000.0,
+            #[allow(clippy::cast_precision_loss)]
             max_ms: times[count - 1] as f64 / 1000.0,
         }
     }
@@ -117,7 +126,7 @@ impl<'a> ScopedTimer<'a> {
     }
 }
 
-impl<'a> std::fmt::Debug for ScopedTimer<'a> {
+impl std::fmt::Debug for ScopedTimer<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScopedTimer")
             .field("name", &self.name)
@@ -127,7 +136,7 @@ impl<'a> std::fmt::Debug for ScopedTimer<'a> {
     }
 }
 
-impl<'a> Drop for ScopedTimer<'a> {
+impl Drop for ScopedTimer<'_> {
     fn drop(&mut self) {
         let elapsed = self.start.elapsed();
 
@@ -177,6 +186,12 @@ pub struct MemoryTracker {
     initial_rss: usize,
 }
 
+impl Default for MemoryTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryTracker {
     /// Create a new memory tracker
     pub fn new() -> Self {
@@ -193,18 +208,19 @@ impl MemoryTracker {
 
         unsafe {
             let mut info: libc::mach_task_basic_info = mem::zeroed();
+            #[allow(clippy::cast_possible_truncation)]
             let mut count = mem::size_of::<libc::mach_task_basic_info>() as u32;
 
             #[allow(deprecated)]
             let result = libc::task_info(
                 libc::mach_task_self(),
                 libc::MACH_TASK_BASIC_INFO,
-                &mut info as *mut _ as *mut c_int,
+                (&raw mut info).cast::<c_int>(),
                 &mut count,
             );
 
             if result == libc::KERN_SUCCESS {
-                info.resident_size as usize
+                info.resident_size.try_into().unwrap_or(usize::MAX)
             } else {
                 0
             }
@@ -220,7 +236,10 @@ impl MemoryTracker {
     /// Get memory growth since creation
     pub fn growth_mb(&self) -> f64 {
         let current = Self::current_rss();
-        (current.saturating_sub(self.initial_rss)) as f64 / 1_048_576.0
+        #[allow(clippy::cast_precision_loss)]
+        {
+            current.saturating_sub(self.initial_rss) as f64 / 1_048_576.0
+        }
     }
 }
 
@@ -244,7 +263,7 @@ impl Default for PerfOverlay {
 
 impl PerfOverlay {
     /// Toggle overlay visibility
-    pub fn toggle(&mut self) {
+    pub const fn toggle(&mut self) {
         self.show = !self.show;
     }
 
@@ -324,7 +343,7 @@ impl PerfOverlay {
                         egui::Color32::GREEN
                     };
 
-                    ui.colored_label(mem_color, format!("Mem Growth: {:.1}MB", mem_growth));
+                    ui.colored_label(mem_color, format!("Mem Growth: {mem_growth:.1}MB"));
                 });
             });
     }

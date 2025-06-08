@@ -47,6 +47,12 @@ impl FsWatcher {
     }
 
     /// Start watching a directory
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Failed to create the filesystem watcher
+    /// - Failed to start watching the specified path
     pub fn watch(&mut self, path: &CanonicalPath) -> Result<()> {
         // Stop any existing watcher
         self.stop();

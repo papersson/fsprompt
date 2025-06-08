@@ -13,12 +13,12 @@ fn create_test_directory(num_dirs: usize, files_per_dir: usize) -> TempDir {
     let base_path = temp_dir.path();
 
     for dir_idx in 0..num_dirs {
-        let dir_path = base_path.join(format!("dir_{:04}", dir_idx));
+        let dir_path = base_path.join(format!("dir_{dir_idx:04}"));
         fs::create_dir(&dir_path).unwrap();
 
         for file_idx in 0..files_per_dir {
-            let file_path = dir_path.join(format!("file_{:04}.txt", file_idx));
-            let content = format!("This is file {} in directory {}\n", file_idx, dir_idx);
+            let file_path = dir_path.join(format!("file_{file_idx:04}.txt"));
+            let content = format!("This is file {file_idx} in directory {dir_idx}\n");
             fs::write(file_path, content.repeat(100)).unwrap(); // ~10KB per file
         }
     }
@@ -40,7 +40,7 @@ fn bench_directory_traversal(c: &mut Criterion) {
                 }
             }
             black_box(file_count)
-        })
+        });
     });
 
     c.bench_function("directory_traversal_parallel", |b| {
@@ -54,7 +54,7 @@ fn bench_directory_traversal(c: &mut Criterion) {
             walker.run(|| {
                 Box::new(|entry| {
                     if let Ok(entry) = entry {
-                        if entry.file_type().map_or(false, |ft| ft.is_file()) {
+                        if entry.file_type().is_some_and(|ft| ft.is_file()) {
                             file_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
@@ -62,7 +62,7 @@ fn bench_directory_traversal(c: &mut Criterion) {
                 })
             });
             black_box(file_count.load(std::sync::atomic::Ordering::Relaxed))
-        })
+        });
     });
 
     c.bench_function("directory_traversal_optimized", |b| {
@@ -70,7 +70,7 @@ fn bench_directory_traversal(c: &mut Criterion) {
             let entries = scan_directory_parallel(&root_path, None, &[]);
             let file_count = entries.iter().filter(|e| !e.is_dir).count();
             black_box(file_count)
-        })
+        });
     });
 }
 
@@ -82,7 +82,7 @@ fn bench_file_reading(c: &mut Criterion) {
     // Collect all file paths
     let file_paths: Vec<PathBuf> = walkdir::WalkDir::new(&root_path)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().is_file())
         .map(|e| e.path().to_path_buf())
         .collect();
@@ -96,7 +96,7 @@ fn bench_file_reading(c: &mut Criterion) {
                 }
             }
             black_box(total_size)
-        })
+        });
     });
 
     c.bench_function("file_reading_parallel", |b| {
@@ -110,7 +110,7 @@ fn bench_file_reading(c: &mut Criterion) {
                 })
                 .sum();
             black_box(total_size)
-        })
+        });
     });
 
     c.bench_function("file_reading_optimized", |b| {
@@ -123,10 +123,10 @@ fn bench_file_reading(c: &mut Criterion) {
             let total_size: usize = results
                 .iter()
                 .filter_map(|(_, result)| result.as_ref().ok())
-                .map(|content| content.len())
+                .map(std::string::String::len)
                 .sum();
             black_box(total_size)
-        })
+        });
     });
 
     // Benchmark memory-mapped reading for large files
@@ -138,7 +138,7 @@ fn bench_file_reading(c: &mut Criterion) {
         b.iter(|| {
             let content = fs::read_to_string(&large_file).unwrap();
             black_box(content.len())
-        })
+        });
     });
 
     c.bench_function("large_file_read_mmap", |b| {
@@ -147,7 +147,7 @@ fn bench_file_reading(c: &mut Criterion) {
             let file = fs::File::open(&large_file).unwrap();
             let mmap = unsafe { Mmap::map(&file).unwrap() };
             black_box(mmap.len())
-        })
+        });
     });
 }
 
@@ -159,7 +159,7 @@ fn bench_output_generation(c: &mut Criterion) {
     // Prepare test data
     let file_contents: Vec<(PathBuf, String)> = walkdir::WalkDir::new(&root_path)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().is_file())
         .map(|e| {
             let path = e.path().to_path_buf();
@@ -182,7 +182,7 @@ fn bench_output_generation(c: &mut Criterion) {
 
             output.push_str("</root>");
             black_box(output.len())
-        })
+        });
     });
 
     c.bench_function("markdown_generation", |b| {
@@ -197,13 +197,13 @@ fn bench_output_generation(c: &mut Criterion) {
             }
 
             black_box(output.len())
-        })
+        });
     });
 }
 
 // Benchmark glob pattern matching
 fn bench_glob_matching(c: &mut Criterion) {
-    let patterns = vec![
+    let patterns = [
         "*.rs",
         "**/*.txt",
         "**/target/**",
@@ -238,7 +238,7 @@ fn bench_glob_matching(c: &mut Criterion) {
                 }
             }
             black_box(match_count)
-        })
+        });
     });
 
     // Benchmark regex-based matching (alternative approach)
@@ -246,13 +246,13 @@ fn bench_glob_matching(c: &mut Criterion) {
         .iter()
         .map(|p| {
             let regex_str = p
-                .replace(".", "\\.")
-                .replace("*", "[^/]*")
+                .replace('.', "\\.")
+                .replace('*', "[^/]*")
                 .replace("**", ".*")
-                .replace("{", "(")
-                .replace("}", ")")
-                .replace(",", "|");
-            regex::Regex::new(&format!("^{}$", regex_str)).unwrap()
+                .replace('{', "(")
+                .replace('}', ")")
+                .replace(',', "|");
+            regex::Regex::new(&format!("^{regex_str}$")).unwrap()
         })
         .collect();
 
@@ -267,7 +267,7 @@ fn bench_glob_matching(c: &mut Criterion) {
                 }
             }
             black_box(match_count)
-        })
+        });
     });
 }
 

@@ -22,21 +22,21 @@ fn generate_large_tree(depth: usize, files_per_dir: usize) -> TreeNode {
         if current_depth < max_depth {
             // Add subdirectories
             for i in 0..3 {
-                let subdir_path = path.join(format!("subdir{}", i));
+                let subdir_path = path.join(format!("subdir{i}"));
                 let mut subdir =
                     generate_subtree(subdir_path, current_depth + 1, max_depth, files_per_dir);
-                subdir.name = format!("subdir{}", i);
+                subdir.name = format!("subdir{i}");
                 node.children.push(subdir);
             }
 
             // Add files
             for i in 0..files_per_dir {
-                let file_path = path.join(format!("file{}.rs", i));
+                let file_path = path.join(format!("file{i}.rs"));
                 let file_canonical =
                     CanonicalPath::new(&file_path).expect("Failed to create canonical path");
                 let mut file_node =
                     TreeNode::new(file_canonical).expect("Failed to create TreeNode");
-                file_node.name = format!("file{}.rs", i);
+                file_node.name = format!("file{i}.rs");
                 file_node.is_dir = false;
                 node.children.push(file_node);
             }
@@ -114,7 +114,7 @@ fn benchmark_tree_rendering(c: &mut Criterion) {
         let mut tree = generate_large_tree(3, 10);
         expand_all(&mut tree);
         let nodes = count_nodes(&tree);
-        println!("Small expanded tree nodes: {}", nodes);
+        println!("Small expanded tree nodes: {nodes}");
 
         b.iter(|| {
             let mut count = 0;
@@ -127,7 +127,7 @@ fn benchmark_tree_rendering(c: &mut Criterion) {
         let mut tree = generate_large_tree(4, 20);
         expand_all(&mut tree);
         let nodes = count_nodes(&tree);
-        println!("Medium expanded tree nodes: {}", nodes);
+        println!("Medium expanded tree nodes: {nodes}");
 
         b.iter(|| {
             let mut count = 0;
@@ -140,7 +140,7 @@ fn benchmark_tree_rendering(c: &mut Criterion) {
         let mut tree = generate_large_tree(5, 30);
         expand_all(&mut tree);
         let nodes = count_nodes(&tree);
-        println!("Large expanded tree nodes: {}", nodes);
+        println!("Large expanded tree nodes: {nodes}");
 
         b.iter(|| {
             let mut count = 0;

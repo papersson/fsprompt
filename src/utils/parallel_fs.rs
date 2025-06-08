@@ -21,15 +21,18 @@ pub struct DirectoryEntry {
 }
 
 /// Performs a parallel directory scan up to a specified depth
+///
+/// # Errors
+///
+/// Returns an empty vector if the root path cannot be canonicalized
 pub fn scan_directory_parallel(
     root: &Path,
     max_depth: Option<usize>,
     ignore_patterns: &[String],
 ) -> Vec<DirectoryEntry> {
     // Create canonical root for path validation
-    let canonical_root = match CanonicalPath::new(root) {
-        Ok(cr) => cr,
-        Err(_) => return Vec::new(), // Return empty if root is invalid
+    let Ok(canonical_root) = CanonicalPath::new(root) else {
+        return Vec::new(); // Return empty if root is invalid
     };
 
     let entries = Arc::new(Mutex::new(Vec::new()));
@@ -53,8 +56,8 @@ pub fn scan_directory_parallel(
     if !ignore_patterns.is_empty() {
         let mut override_builder = OverrideBuilder::new(root);
         for pattern in ignore_patterns {
-            if let Err(e) = override_builder.add(&format!("!{}", pattern)) {
-                eprintln!("Invalid ignore pattern '{}': {}", pattern, e);
+            if let Err(e) = override_builder.add(&format!("!{pattern}")) {
+                eprintln!("Invalid ignore pattern '{pattern}': {e}");
             }
         }
         if let Ok(overrides) = override_builder.build() {
@@ -74,7 +77,7 @@ pub fn scan_directory_parallel(
                 if let Ok(canonical_path) =
                     CanonicalPath::new_within_root(&path_buf, &canonical_root)
                 {
-                    let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
+                    let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
                     let name = entry.file_name().to_string_lossy().into_owned();
                     let parent = path_buf
                         .parent()
@@ -96,11 +99,9 @@ pub fn scan_directory_parallel(
         })
     });
 
-    let result = match entries.lock() {
-        Ok(entries) => entries.clone(),
-        Err(_) => Vec::new(), // Return empty vector if mutex is poisoned
-    };
-    result
+    entries
+        .lock()
+        .map_or_else(|_| Vec::new(), |entries| entries.clone())
 }
 
 /// Builds a hierarchical tree structure from flat entries
@@ -112,9 +113,7 @@ pub fn build_tree_from_entries(
     // Group entries by parent
     for entry in entries {
         if let Some(parent) = &entry.parent {
-            tree.entry(parent.clone())
-                .or_insert_with(Vec::new)
-                .push(entry);
+            tree.entry(parent.clone()).or_default().push(entry);
         }
     }
 
@@ -132,6 +131,13 @@ pub fn build_tree_from_entries(
 
 /// Read multiple files in parallel with path validation
 /// Validates all paths are within the root directory before reading
+///
+/// # Errors
+///
+/// Returns errors for:
+/// - Path traversal attempts (security error)
+/// - File read failures
+/// - UTF-8 decoding errors
 pub fn read_files_parallel_secure(
     file_paths: &[CanonicalPath],
     root: &CanonicalPath,
@@ -148,21 +154,24 @@ pub fn read_files_parallel_secure(
                 );
             }
 
-            let result = if let Ok(metadata) = std::fs::metadata(path.as_path()) {
-                if metadata.len() as usize > use_mmap_threshold {
-                    // Use memory-mapped reading for large files
-                    read_file_mmap(path.as_path())
-                } else {
-                    // Use standard reading for small files
-                    std::fs::read_to_string(path.as_path())
-                        .map_err(|e| format!("Failed to read file: {}", e))
-                }
-            } else {
-                Err(format!(
-                    "Failed to get metadata for {}: file may not exist or be inaccessible",
-                    path.as_path().display()
-                ))
-            };
+            let result = std::fs::metadata(path.as_path()).map_or_else(
+                |_| {
+                    Err(format!(
+                        "Failed to get metadata for {}: file may not exist or be inaccessible",
+                        path.as_path().display()
+                    ))
+                },
+                |metadata| {
+                    if usize::try_from(metadata.len()).unwrap_or(usize::MAX) > use_mmap_threshold {
+                        // Use memory-mapped reading for large files
+                        read_file_mmap(path.as_path())
+                    } else {
+                        // Use standard reading for small files
+                        std::fs::read_to_string(path.as_path())
+                            .map_err(|e| format!("Failed to read file: {e}"))
+                    }
+                },
+            );
 
             (path.clone(), result)
         })
@@ -170,6 +179,12 @@ pub fn read_files_parallel_secure(
 }
 
 /// Parallel file reading with memory mapping for large files
+///
+/// # Errors
+///
+/// Returns errors for:
+/// - File read failures
+/// - UTF-8 decoding errors
 pub fn read_files_parallel(
     file_paths: &[CanonicalPath],
     use_mmap_threshold: usize,
@@ -177,21 +192,24 @@ pub fn read_files_parallel(
     file_paths
         .par_iter()
         .map(|path| {
-            let result = if let Ok(metadata) = std::fs::metadata(path.as_path()) {
-                if metadata.len() as usize > use_mmap_threshold {
-                    // Use memory-mapped reading for large files
-                    read_file_mmap(path.as_path())
-                } else {
-                    // Use standard reading for small files
-                    std::fs::read_to_string(path.as_path())
-                        .map_err(|e| format!("Failed to read file: {}", e))
-                }
-            } else {
-                Err(format!(
-                    "Failed to get metadata for {}: file may not exist or be inaccessible",
-                    path.as_path().display()
-                ))
-            };
+            let result = std::fs::metadata(path.as_path()).map_or_else(
+                |_| {
+                    Err(format!(
+                        "Failed to get metadata for {}: file may not exist or be inaccessible",
+                        path.as_path().display()
+                    ))
+                },
+                |metadata| {
+                    if usize::try_from(metadata.len()).unwrap_or(usize::MAX) > use_mmap_threshold {
+                        // Use memory-mapped reading for large files
+                        read_file_mmap(path.as_path())
+                    } else {
+                        // Use standard reading for small files
+                        std::fs::read_to_string(path.as_path())
+                            .map_err(|e| format!("Failed to read file: {e}"))
+                    }
+                },
+            );
 
             (path.clone(), result)
         })
@@ -199,17 +217,24 @@ pub fn read_files_parallel(
 }
 
 /// Read a file using memory mapping
+///
+/// # Errors
+///
+/// Returns errors for:
+/// - File open failures
+/// - Memory mapping failures
+/// - UTF-8 decoding errors
 fn read_file_mmap(path: &Path) -> Result<String, String> {
     use memmap2::Mmap;
     use std::fs::File;
 
     let file =
-        File::open(path).map_err(|e| format!("Failed to open file for memory mapping: {}", e))?;
+        File::open(path).map_err(|e| format!("Failed to open file for memory mapping: {e}"))?;
     let mmap =
-        unsafe { Mmap::map(&file) }.map_err(|e| format!("Failed to create memory map: {}", e))?;
+        unsafe { Mmap::map(&file) }.map_err(|e| format!("Failed to create memory map: {e}"))?;
 
     // Convert to string, handling UTF-8 errors
-    String::from_utf8(mmap.to_vec()).map_err(|e| format!("UTF-8 error: {}", e))
+    String::from_utf8(mmap.to_vec()).map_err(|e| format!("UTF-8 error: {e}"))
 }
 
 /// Pattern cache for improved glob matching performance
@@ -239,7 +264,7 @@ impl PatternCache {
                     .replace('{', "(")
                     .replace('}', ")")
                     .replace(',', "|");
-                regex::Regex::new(&format!("^{}$", regex_str)).ok()
+                regex::Regex::new(&format!("^{regex_str}$")).ok()
             })
             .collect();
 

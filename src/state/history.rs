@@ -25,7 +25,7 @@ pub struct HistoryManager {
 
 impl HistoryManager {
     /// Creates a new history manager with specified maximum depth
-    pub fn new(max_depth: HistorySize) -> Self {
+    pub const fn new(max_depth: HistorySize) -> Self {
         Self {
             past: Vec::new(),
             future: Vec::new(),

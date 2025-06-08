@@ -41,8 +41,8 @@ impl Default for SerializableConfig {
             split_position: 0.3,
             last_directory: None,
             ignore_patterns: String::new(),
-            include_tree: true,
-            output_format: "xml".to_string(),
+            include_tree: false,
+            output_format: "markdown".to_string(),
             theme: "auto".to_string(),
         }
     }
@@ -68,7 +68,7 @@ impl From<&AppConfig> for SerializableConfig {
 }
 
 impl SerializableConfig {
-    /// Convert to AppConfig with defaults for missing fields
+    /// Convert to `AppConfig` with defaults for missing fields
     pub fn to_app_config(&self) -> AppConfig {
         crate::core::types::AppConfig {
             window: crate::core::types::WindowConfig {
@@ -109,9 +109,8 @@ pub struct ConfigManager {
     config_path: PathBuf,
 }
 
-impl ConfigManager {
-    /// Creates a new config manager with platform-specific config path
-    pub fn new() -> Self {
+impl Default for ConfigManager {
+    fn default() -> Self {
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("fsprompt");
@@ -123,22 +122,31 @@ impl ConfigManager {
             config_path: config_dir.join("config.json"),
         }
     }
+}
+
+impl ConfigManager {
+    /// Creates a new config manager with platform-specific config path
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Load configuration from disk, returns default if not found or invalid
     pub fn load(&self) -> AppConfig {
-        match std::fs::read_to_string(&self.config_path) {
-            Ok(content) => {
-                if let Ok(serializable) = serde_json::from_str::<SerializableConfig>(&content) {
-                    serializable.to_app_config()
-                } else {
-                    AppConfig::default()
-                }
-            }
-            Err(_) => AppConfig::default(),
-        }
+        std::fs::read_to_string(&self.config_path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<SerializableConfig>(&content).ok())
+            .map_or_else(AppConfig::default, |serializable| {
+                serializable.to_app_config()
+            })
     }
 
     /// Save configuration to disk
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Serialization to JSON fails
+    /// - Writing to the configuration file fails
     pub fn save(&self, config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
         let serializable = SerializableConfig::from(config);
         let json = serde_json::to_string_pretty(&serializable)?;

@@ -48,7 +48,7 @@ pub enum WorkerEvent {
 }
 
 /// Progress stages for output generation
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgressStage {
     /// Scanning filesystem
     ScanningFiles,
@@ -67,13 +67,14 @@ pub struct WorkerHandle {
 
 impl WorkerHandle {
     /// Create a new worker handle and spawn worker thread
+    #[must_use]
     pub fn new() -> Self {
         let (cmd_tx, cmd_rx) = crossbeam::channel::unbounded();
         let (event_tx, event_rx) = crossbeam::channel::unbounded();
 
         // Spawn the worker thread
         std::thread::spawn(move || {
-            generator::run_worker(cmd_rx, event_tx);
+            generator::run_worker(&cmd_rx, &event_tx);
         });
 
         Self {
@@ -83,6 +84,11 @@ impl WorkerHandle {
     }
 
     /// Send command to worker thread
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the worker thread has been terminated and
+    /// the channel is disconnected.
     pub fn send_command(
         &self,
         command: WorkerCommand,
@@ -93,5 +99,11 @@ impl WorkerHandle {
     /// Try to receive event from worker thread
     pub fn try_recv_event(&self) -> Option<WorkerEvent> {
         self.receiver.try_recv().ok()
+    }
+}
+
+impl Default for WorkerHandle {
+    fn default() -> Self {
+        Self::new()
     }
 }

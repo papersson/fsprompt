@@ -1,7 +1,7 @@
 //! Event handlers for keyboard shortcuts and directory selection
 
 use crate::app::FsPromptApp;
-use crate::core::types::*;
+use crate::core::types::{CanonicalPath, Theme};
 use eframe::egui;
 
 impl FsPromptApp {
@@ -77,19 +77,19 @@ impl FsPromptApp {
 
                 println!("DEBUG: Tree root set, calling debug_tree...");
                 // Debug the tree structure
-                if !self.tree.roots.is_empty() {
+                if self.tree.roots.is_empty() {
+                    println!("DEBUG: Tree roots is empty!");
+                } else {
                     println!(
                         "DEBUG: Tree structure:\n{}",
                         self.tree.roots[0].debug_tree(0)
                     );
-                } else {
-                    println!("DEBUG: Tree roots is empty!");
                 }
 
                 // Start watching the directory
                 if let Err(e) = self.fs_watcher.watch(&canonical_path) {
                     self.toast_manager
-                        .warning(format!("Failed to watch directory: {}", e));
+                        .warning(format!("Failed to watch directory: {e}"));
                 }
 
                 self.files_changed = false;
@@ -109,14 +109,8 @@ impl FsPromptApp {
     }
 
     /// Handles theme selection
-    pub fn handle_theme_selection(&mut self, ctx: &egui::Context, theme: Theme) {
+    pub fn handle_theme_selection(&mut self, _ctx: &egui::Context, theme: Theme) {
         self.state.config.ui.theme = theme;
-        let theme_str = match theme {
-            Theme::System => "auto",
-            Theme::Light => "light",
-            Theme::Dark => "dark",
-        };
-        Self::apply_theme_to_ctx(ctx, theme_str);
         self.save_config();
         let message = match theme {
             Theme::System => "Theme set to Auto",

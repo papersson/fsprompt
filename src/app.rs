@@ -39,6 +39,10 @@ pub struct FsPromptApp {
     pub perf_overlay: PerfOverlay,
     /// Active tab for narrow/mobile view
     pub active_tab: TabView,
+    /// Input field for new ignore pattern
+    pub new_pattern_input: String,
+    /// Saved ignore patterns for tracking changes
+    pub saved_ignore_patterns: Vec<String>,
 }
 
 /// Tab view for narrow/mobile layouts
@@ -72,6 +76,9 @@ impl FsPromptApp {
         };
         Self::apply_theme(cc, theme_str);
 
+        // Save a copy of the loaded ignore patterns
+        let saved_patterns = state.config.ignore_patterns.clone();
+
         Self {
             state,
             tree: crate::ui::tree::DirectoryTree::new(),
@@ -85,6 +92,8 @@ impl FsPromptApp {
             files_changed: false,
             perf_overlay: PerfOverlay::default(),
             active_tab: TabView::Files,
+            new_pattern_input: String::new(),
+            saved_ignore_patterns: saved_patterns,
         }
     }
 
@@ -140,7 +149,7 @@ impl FsPromptApp {
                     ctx.request_repaint();
                 }
                 crate::watcher::WatcherEvent::Error(e) => {
-                    self.toast_manager.error(format!("Watcher error: {}", e));
+                    self.toast_manager.error(format!("Watcher error: {e}"));
                 }
             }
         }
@@ -173,7 +182,7 @@ impl FsPromptApp {
             };
 
             if let Err(e) = self.worker.send_command(command) {
-                self.error_message = Some(format!("Failed to start generation: {}", e));
+                self.error_message = Some(format!("Failed to start generation: {e}"));
                 self.state.output.generating = false;
             }
         }
@@ -227,12 +236,12 @@ impl FsPromptApp {
                         self.toast_manager.success("Copied to clipboard!");
                     }
                     Err(e) => {
-                        self.toast_manager.error(format!("Failed to copy: {}", e));
+                        self.toast_manager.error(format!("Failed to copy: {e}"));
                     }
                 },
                 Err(e) => {
                     self.toast_manager
-                        .error(format!("Failed to access clipboard: {}", e));
+                        .error(format!("Failed to access clipboard: {e}"));
                 }
             }
         }
@@ -245,12 +254,12 @@ impl FsPromptApp {
             OutputFormat::Markdown => "md",
         };
 
-        let default_filename = format!("codebase_export.{}", extension);
+        let default_filename = format!("codebase_export.{extension}");
 
         if let Some(content) = &self.state.output.content {
             if let Some(path) = rfd::FileDialog::new()
                 .set_file_name(&default_filename)
-                .add_filter(&format!("{} files", extension.to_uppercase()), &[extension])
+                .add_filter(format!("{} files", extension.to_uppercase()), &[extension])
                 .add_filter("All files", &["*"])
                 .save_file()
             {
@@ -263,7 +272,7 @@ impl FsPromptApp {
                     }
                     Err(e) => {
                         self.toast_manager
-                            .error(format!("Failed to save file: {}", e));
+                            .error(format!("Failed to save file: {e}"));
                     }
                 }
             }
@@ -292,11 +301,13 @@ impl FsPromptApp {
     }
 
     /// Navigate to next search match
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to &mut self
     pub fn next_match(&mut self) {
         self.state.search.output_search.next_match();
     }
 
     /// Navigate to previous search match
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to &mut self
     pub fn prev_match(&mut self) {
         self.state.search.output_search.prev_match();
     }
@@ -370,6 +381,8 @@ mod tests {
             files_changed: false,
             perf_overlay: PerfOverlay::default(),
             active_tab: TabView::Files,
+            new_pattern_input: String::new(),
+            saved_ignore_patterns: Vec::new(),
         };
 
         assert!(app.state.root.is_none());
@@ -393,6 +406,8 @@ mod tests {
             files_changed: false,
             perf_overlay: PerfOverlay::default(),
             active_tab: TabView::Files,
+            new_pattern_input: String::new(),
+            saved_ignore_patterns: Vec::new(),
         };
 
         // Test that we can set output format
@@ -415,10 +430,12 @@ mod tests {
             files_changed: false,
             perf_overlay: PerfOverlay::default(),
             active_tab: TabView::Files,
+            new_pattern_input: String::new(),
+            saved_ignore_patterns: Vec::new(),
         };
 
         // Test that Debug is implemented correctly
-        let debug_str = format!("{:?}", app);
+        let debug_str = format!("{app:?}");
         assert!(debug_str.contains("FsPromptApp"));
         assert!(debug_str.contains("state"));
     }

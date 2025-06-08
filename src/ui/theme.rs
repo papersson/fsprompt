@@ -90,41 +90,41 @@ impl Theme {
     pub const ICON_SPACING: f32 = 4.0;
 
     /// Apply theme to egui context
+    #[allow(clippy::cast_possible_truncation)]
     pub fn apply_theme(ctx: &egui::Context, dark_mode: bool) {
-        let mut style = Style::default();
-
-        // Configure text styles
-        style.text_styles = [
-            (
-                egui::TextStyle::Heading,
-                egui::FontId::new(14.0, FontFamily::Proportional),
-            ),
-            (
-                egui::TextStyle::Body,
-                egui::FontId::new(13.0, FontFamily::Proportional),
-            ),
-            (
-                egui::TextStyle::Button,
-                egui::FontId::new(13.0, FontFamily::Proportional),
-            ),
-            (
-                egui::TextStyle::Small,
-                egui::FontId::new(11.0, FontFamily::Proportional),
-            ),
-            (
-                egui::TextStyle::Monospace,
-                egui::FontId::new(12.0, FontFamily::Monospace),
-            ),
-        ]
-        .iter()
-        .cloned()
-        .collect();
+        let mut style = Style {
+            text_styles: [
+                (
+                    egui::TextStyle::Heading,
+                    egui::FontId::new(14.0, FontFamily::Proportional),
+                ),
+                (
+                    egui::TextStyle::Body,
+                    egui::FontId::new(13.0, FontFamily::Proportional),
+                ),
+                (
+                    egui::TextStyle::Button,
+                    egui::FontId::new(13.0, FontFamily::Proportional),
+                ),
+                (
+                    egui::TextStyle::Small,
+                    egui::FontId::new(11.0, FontFamily::Proportional),
+                ),
+                (
+                    egui::TextStyle::Monospace,
+                    egui::FontId::new(12.0, FontFamily::Monospace),
+                ),
+            ]
+            .iter()
+            .cloned()
+            .collect(),
+            ..Default::default()
+        };
 
         // Configure spacing
         style.spacing.item_spacing = egui::vec2(Self::SPACING_SM, Self::SPACING_SM);
         style.spacing.button_padding = egui::vec2(Self::BUTTON_PADDING_H, Self::BUTTON_PADDING_V);
-        style.spacing.menu_margin =
-            egui::Margin::symmetric(Self::SPACING_SM as i8, Self::SPACING_SM as i8);
+        style.spacing.menu_margin = egui::Margin::same(Self::SPACING_SM as i8);
         style.spacing.indent = Self::INDENT_SIZE;
 
         // Configure visuals
@@ -189,7 +189,7 @@ impl Theme {
     }
 
     /// Get background color for given theme and level
-    pub fn bg_color(dark_mode: bool, level: BgLevel) -> Color32 {
+    pub const fn bg_color(dark_mode: bool, level: BgLevel) -> Color32 {
         match (dark_mode, level) {
             (true, BgLevel::Primary) => Self::DARK_BG_PRIMARY,
             (true, BgLevel::Secondary) => Self::DARK_BG_SECONDARY,
@@ -201,7 +201,7 @@ impl Theme {
     }
 
     /// Get text color for given theme and emphasis
-    pub fn text_color(dark_mode: bool, emphasis: TextEmphasis) -> Color32 {
+    pub const fn text_color(dark_mode: bool, emphasis: TextEmphasis) -> Color32 {
         match (dark_mode, emphasis) {
             (true, TextEmphasis::Primary) => Self::DARK_TEXT_PRIMARY,
             (true, TextEmphasis::Secondary) => Self::DARK_TEXT_SECONDARY,
@@ -211,7 +211,7 @@ impl Theme {
     }
 
     /// Get accent color for given theme
-    pub fn accent_color(dark_mode: bool) -> Color32 {
+    pub const fn accent_color(dark_mode: bool) -> Color32 {
         if dark_mode {
             Self::DARK_ACCENT
         } else {
@@ -220,7 +220,7 @@ impl Theme {
     }
 
     /// Get border color for given theme
-    pub fn border_color(dark_mode: bool) -> Color32 {
+    pub const fn border_color(dark_mode: bool) -> Color32 {
         if dark_mode {
             Self::DARK_BORDER
         } else {

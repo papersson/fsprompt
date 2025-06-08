@@ -15,17 +15,22 @@ pub struct CanonicalPath(PathBuf);
 
 impl CanonicalPath {
     /// Creates a new canonical path, resolving symlinks and normalizing
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path cannot be canonicalized (e.g., doesn't exist)
     pub fn new(path: impl AsRef<Path>) -> std::io::Result<Self> {
         Ok(Self(path.as_ref().canonicalize()?))
     }
 
     /// Get the inner path
     #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to PathBuf deref coercion
     pub fn as_path(&self) -> &Path {
         &self.0
     }
 
-    /// Get the inner PathBuf
+    /// Get the inner `PathBuf`
     #[must_use]
     pub fn to_path_buf(&self) -> PathBuf {
         self.0.clone()
@@ -46,13 +51,19 @@ impl CanonicalPath {
     /// This prevents path traversal attacks by ensuring the canonicalized path
     /// remains within the expected directory tree
     #[must_use]
-    pub fn is_contained_within(&self, root: &CanonicalPath) -> bool {
+    pub fn is_contained_within(&self, root: &Self) -> bool {
         self.0.starts_with(&root.0)
     }
 
     /// Create a new canonical path that is guaranteed to be within the root
     /// Returns an error if the path would escape the root directory
-    pub fn new_within_root(path: impl AsRef<Path>, root: &CanonicalPath) -> std::io::Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The path cannot be canonicalized
+    /// - The path would escape the root directory (path traversal attack)
+    pub fn new_within_root(path: impl AsRef<Path>, root: &Self) -> std::io::Result<Self> {
         let canonical = Self::new(path)?;
         if !canonical.is_contained_within(root) {
             return Err(std::io::Error::new(
@@ -64,10 +75,10 @@ impl CanonicalPath {
     }
 }
 
-/// Serializable wrapper for CanonicalPath
+/// Serializable wrapper for `CanonicalPath`
 ///
 /// This type exists to bridge the gap between type safety and persistence.
-/// Use CanonicalPath for runtime operations and SerializableCanonicalPath for config storage.
+/// Use `CanonicalPath` for runtime operations and `SerializableCanonicalPath` for config storage.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct SerializableCanonicalPath(PathBuf);
 
@@ -78,6 +89,10 @@ impl SerializableCanonicalPath {
     }
 
     /// Try to convert to a canonical path
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path cannot be canonicalized
     pub fn to_canonical(&self) -> Result<CanonicalPath, std::io::Error> {
         CanonicalPath::new(&self.0)
     }
@@ -85,7 +100,7 @@ impl SerializableCanonicalPath {
 
 impl From<&CanonicalPath> for SerializableCanonicalPath {
     fn from(path: &CanonicalPath) -> Self {
-        SerializableCanonicalPath::from_canonical(path)
+        Self::from_canonical(path)
     }
 }
 
@@ -119,7 +134,7 @@ impl TokenCount {
     /// Estimates tokens from character count (roughly 1 token = 4 chars)
     #[must_use]
     pub const fn from_chars(chars: usize) -> Self {
-        Self((chars + 3) / 4)
+        Self(chars.div_ceil(4))
     }
 
     /// Gets the raw count
@@ -217,7 +232,7 @@ impl FsEntry {
     pub const fn file_size(&self) -> Option<FileSize> {
         match &self.entry_type {
             FsEntryType::File { size } => Some(*size),
-            _ => None,
+            FsEntryType::Directory => None,
         }
     }
 
@@ -285,7 +300,13 @@ pub struct IgnorePattern {
 
 impl IgnorePattern {
     /// Create from a pattern string, auto-detecting type
-    pub fn from_str(pattern: &str) -> Result<Self, String> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The glob pattern is invalid
+    /// - The regex pattern is invalid
+    pub fn parse(pattern: &str) -> Result<Self, String> {
         let pattern_type = if pattern.contains('*') || pattern.contains('?') {
             PatternType::Glob
         } else if pattern.starts_with('^') || pattern.ends_with('$') {
@@ -299,23 +320,21 @@ impl IgnorePattern {
             PatternType::Exact => {
                 let pattern = pattern.to_string();
                 Arc::new(move |path: &Path| -> bool {
-                    path.to_str().map(|p| p.contains(&pattern)).unwrap_or(false)
+                    path.to_str().is_some_and(|p| p.contains(&pattern))
                 }) as Arc<dyn Fn(&Path) -> bool + Send + Sync>
             }
             PatternType::Glob => {
                 let glob_pattern = glob::Pattern::new(pattern)
-                    .map_err(|e| format!("Invalid glob pattern: {}", e))?;
+                    .map_err(|e| format!("Invalid glob pattern: {e}"))?;
                 Arc::new(move |path: &Path| -> bool {
-                    path.to_str()
-                        .map(|p| glob_pattern.matches(p))
-                        .unwrap_or(false)
+                    path.to_str().is_some_and(|p| glob_pattern.matches(p))
                 }) as Arc<dyn Fn(&Path) -> bool + Send + Sync>
             }
             PatternType::Regex => {
                 let regex = regex::Regex::new(pattern)
-                    .map_err(|e| format!("Invalid regex pattern: {}", e))?;
+                    .map_err(|e| format!("Invalid regex pattern: {e}"))?;
                 Arc::new(move |path: &Path| -> bool {
-                    path.to_str().map(|p| regex.is_match(p)).unwrap_or(false)
+                    path.to_str().is_some_and(|p| regex.is_match(p))
                 }) as Arc<dyn Fn(&Path) -> bool + Send + Sync>
             }
         };
@@ -332,6 +351,7 @@ impl std::fmt::Debug for IgnorePattern {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IgnorePattern")
             .field("pattern", &self.pattern)
+            .field("pattern_type", &self.pattern_type)
             .field("compiled", &"<compiled>")
             .finish()
     }
@@ -343,9 +363,9 @@ impl std::fmt::Debug for IgnorePattern {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     /// XML format
-    #[default]
     Xml,
     /// Markdown format  
+    #[default]
     Markdown,
 }
 
@@ -366,17 +386,17 @@ pub struct GenerationTime(std::time::Duration);
 
 impl GenerationTime {
     /// Create from a duration
-    pub fn from_duration(duration: std::time::Duration) -> Self {
+    pub const fn from_duration(duration: std::time::Duration) -> Self {
         Self(duration)
     }
 
     /// Get as milliseconds
-    pub fn as_millis(&self) -> u128 {
+    pub const fn as_millis(&self) -> u128 {
         self.0.as_millis()
     }
 
     /// Get the inner duration
-    pub fn as_duration(&self) -> std::time::Duration {
+    pub const fn as_duration(&self) -> std::time::Duration {
         self.0
     }
 }
@@ -397,7 +417,7 @@ impl FileCount {
     }
 
     /// Increment the count
-    pub fn increment(&mut self) {
+    pub const fn increment(&mut self) {
         self.0 += 1;
     }
 }
@@ -426,6 +446,7 @@ impl ProgressCount {
     }
 
     /// Get progress as a percentage (0.0 to 100.0)
+    #[allow(clippy::cast_precision_loss)]
     pub fn percentage(&self) -> f32 {
         if self.total == 0 {
             100.0
@@ -440,7 +461,7 @@ impl ProgressCount {
     }
 
     /// Increment current count
-    pub fn increment(&mut self) {
+    pub const fn increment(&mut self) {
         if self.current < self.total {
             self.current += 1;
         }
@@ -521,7 +542,8 @@ impl TreeDepth {
     }
 
     /// Increment depth (for traversing deeper)
-    pub fn increment(&self) -> Self {
+    #[must_use]
+    pub const fn increment(&self) -> Self {
         Self(self.0 + 1)
     }
 
@@ -532,7 +554,7 @@ impl TreeDepth {
 }
 
 /// Validation error types
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
     /// Font size is out of valid range
     FontSizeOutOfRange,
@@ -543,7 +565,7 @@ pub enum ValidationError {
 }
 
 /// System operation errors
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SystemError {
     /// Time operation failed
     TimeError(String),
@@ -554,8 +576,8 @@ pub enum SystemError {
 impl std::fmt::Display for SystemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TimeError(msg) => write!(f, "Time operation failed: {}", msg),
-            Self::MutexPoisoned(msg) => write!(f, "Mutex poisoned: {}", msg),
+            Self::TimeError(msg) => write!(f, "Time operation failed: {msg}"),
+            Self::MutexPoisoned(msg) => write!(f, "Mutex poisoned: {msg}"),
         }
     }
 }
@@ -585,8 +607,12 @@ impl FontSize {
     pub const MAX: f32 = 24.0;
 
     /// Create a new font size with validation
+    ///
+    /// # Errors
+    ///
+    /// Returns `ValidationError::FontSizeOutOfRange` if size is not between 8.0 and 24.0
     pub fn new(size: f32) -> Result<Self, ValidationError> {
-        if size >= Self::MIN && size <= Self::MAX {
+        if (Self::MIN..=Self::MAX).contains(&size) {
             Ok(Self(size))
         } else {
             Err(ValidationError::FontSizeOutOfRange)
@@ -605,6 +631,10 @@ pub struct WindowRatio(f32);
 
 impl WindowRatio {
     /// Create a new window ratio with validation
+    ///
+    /// # Errors
+    ///
+    /// Returns `ValidationError::RatioOutOfRange` if ratio is not between 0.0 and 1.0
     pub fn new(ratio: f32) -> Result<Self, ValidationError> {
         if (0.0..=1.0).contains(&ratio) {
             Ok(Self(ratio))
@@ -625,6 +655,10 @@ pub struct NonEmptyString(String);
 
 impl NonEmptyString {
     /// Create a new non-empty string
+    ///
+    /// # Errors
+    ///
+    /// Returns `ValidationError::EmptyString` if the string is empty or contains only whitespace
     pub fn new(s: String) -> Result<Self, ValidationError> {
         if s.trim().is_empty() {
             Err(ValidationError::EmptyString)
@@ -634,6 +668,7 @@ impl NonEmptyString {
     }
 
     /// Get the inner string
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to String deref coercion
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -655,11 +690,13 @@ pub struct ClipboardContent {
 
 impl ClipboardContent {
     /// Create new clipboard content
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to String parameter
     pub fn new(content: String, format: OutputFormat) -> Self {
         Self { content, format }
     }
 
     /// Get the content
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to String deref coercion
     pub fn content(&self) -> &str {
         &self.content
     }
@@ -681,6 +718,7 @@ pub struct PatternString(String);
 
 impl PatternString {
     /// Create from a string
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to String parameter
     pub fn new(s: String) -> Self {
         Self(s)
     }
@@ -700,6 +738,7 @@ impl PatternString {
     }
 
     /// Get as string
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to String deref coercion
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -713,7 +752,7 @@ impl PatternString {
 // ===== Application State =====
 
 /// Main application state with clear separation of concerns
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct AppState {
     /// Current root directory
     pub root: Option<CanonicalPath>,
@@ -727,19 +766,6 @@ pub struct AppState {
     pub output: OutputState,
     /// Application configuration
     pub config: AppConfig,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            root: None,
-            expanded: HashSet::new(),
-            selections: SelectionTracker::default(),
-            search: SearchState::default(),
-            output: OutputState::default(),
-            config: AppConfig::default(),
-        }
-    }
 }
 
 /// Tracks selections with undo/redo support
@@ -802,14 +828,14 @@ pub struct OutputSearch {
 
 impl OutputSearch {
     /// Move to next match
-    pub fn next_match(&mut self) {
+    pub const fn next_match(&mut self) {
         if self.match_count > 0 {
             self.current_match = (self.current_match + 1) % self.match_count;
         }
     }
 
     /// Move to previous match
-    pub fn prev_match(&mut self) {
+    pub const fn prev_match(&mut self) {
         if self.match_count > 0 {
             self.current_match = if self.current_match == 0 {
                 self.match_count - 1
@@ -846,7 +872,7 @@ pub struct AppConfig {
     pub performance: PerformanceConfig,
 }
 
-/// Builder for AppConfig
+/// Builder for `AppConfig`
 #[derive(Debug, Default)]
 pub struct AppConfigBuilder {
     window: Option<WindowConfig>,
@@ -857,29 +883,41 @@ pub struct AppConfigBuilder {
 
 impl AppConfigBuilder {
     /// Create a new builder
-    pub fn new() -> Self {
-        Self::default()
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            window: None,
+            ui: None,
+            ignore_patterns: None,
+            performance: None,
+        }
     }
 
     /// Set window configuration
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to mutation
     pub fn window(mut self, window: WindowConfig) -> Self {
         self.window = Some(window);
         self
     }
 
     /// Set UI configuration
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to mutation
     pub fn ui(mut self, ui: UiConfig) -> Self {
         self.ui = Some(ui);
         self
     }
 
     /// Set ignore patterns
+    #[must_use]
     pub fn ignore_patterns(mut self, patterns: Vec<String>) -> Self {
         self.ignore_patterns = Some(patterns);
         self
     }
 
     /// Add a single ignore pattern
+    #[must_use]
     pub fn add_ignore_pattern(mut self, pattern: String) -> Self {
         self.ignore_patterns
             .get_or_insert_with(|| {
@@ -898,12 +936,15 @@ impl AppConfigBuilder {
     }
 
     /// Set performance configuration
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to mutation
     pub fn performance(mut self, perf: PerformanceConfig) -> Self {
         self.performance = Some(perf);
         self
     }
 
-    /// Build the final AppConfig
+    /// Build the final `AppConfig`
+    #[must_use]
     pub fn build(self) -> AppConfig {
         AppConfig {
             window: self.window.unwrap_or_default(),
@@ -954,31 +995,28 @@ pub struct WindowConfig {
     pub left_pane_ratio: f32,
 }
 
-/// Builder for WindowConfig
-#[derive(Debug)]
+/// Builder for `WindowConfig`
+#[derive(Debug, Default)]
 pub struct WindowConfigBuilder {
     width: Option<f32>,
     height: Option<f32>,
     left_pane_ratio: Option<f32>,
 }
 
-impl Default for WindowConfigBuilder {
-    fn default() -> Self {
+impl WindowConfigBuilder {
+    /// Create a new builder
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             width: None,
             height: None,
             left_pane_ratio: None,
         }
     }
-}
-
-impl WindowConfigBuilder {
-    /// Create a new builder
-    pub fn new() -> Self {
-        Self::default()
-    }
 
     /// Set window dimensions
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to mutation
     pub fn dimensions(mut self, width: f32, height: f32) -> Self {
         self.width = Some(width);
         self.height = Some(height);
@@ -986,24 +1024,31 @@ impl WindowConfigBuilder {
     }
 
     /// Set window width
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to mutation
     pub fn width(mut self, width: f32) -> Self {
         self.width = Some(width);
         self
     }
 
     /// Set window height
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to mutation
     pub fn height(mut self, height: f32) -> Self {
         self.height = Some(height);
         self
     }
 
     /// Set left pane ratio
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // Cannot be const due to mutation
     pub fn left_pane_ratio(mut self, ratio: f32) -> Self {
         self.left_pane_ratio = Some(ratio.clamp(0.0, 1.0));
         self
     }
 
-    /// Build the final WindowConfig
+    /// Build the final `WindowConfig`
+    #[must_use]
     pub fn build(self) -> WindowConfig {
         WindowConfig {
             width: self.width.unwrap_or(1200.0),
@@ -1042,7 +1087,7 @@ impl Default for UiConfig {
             theme: Theme::default(),
             font_size: 12.0,
             show_hidden: false,
-            include_tree: true,
+            include_tree: false,
         }
     }
 }

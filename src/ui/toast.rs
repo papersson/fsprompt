@@ -18,7 +18,7 @@ pub enum ToastVariant {
 
 impl ToastVariant {
     /// Gets the color for this variant
-    fn color(&self) -> egui::Color32 {
+    const fn color(self) -> egui::Color32 {
         match self {
             Self::Success => Theme::SUCCESS,
             Self::Warning => Theme::WARNING,
@@ -27,7 +27,7 @@ impl ToastVariant {
     }
 
     /// Gets the icon for this variant
-    fn icon(&self) -> &'static str {
+    const fn icon(self) -> &'static str {
         match self {
             Self::Success => "✓",
             Self::Warning => "⚠",
@@ -36,7 +36,7 @@ impl ToastVariant {
     }
 
     /// Gets the auto-dismiss duration
-    fn dismiss_duration(&self) -> Duration {
+    const fn dismiss_duration(self) -> Duration {
         match self {
             Self::Success => Duration::from_secs(2),
             Self::Warning => Duration::from_secs(3),
@@ -163,11 +163,11 @@ impl ToastManager {
             let message = toast.message.clone();
             let remaining_fraction = toast.remaining_fraction();
 
-            // Position at top-right corner
+            // Position at bottom-right corner
             egui::Area::new(egui::Id::new("toast_area"))
                 .anchor(
-                    egui::Align2::RIGHT_TOP,
-                    egui::vec2(-Theme::SPACING_MD, Theme::SPACING_MD),
+                    egui::Align2::RIGHT_BOTTOM,
+                    egui::vec2(-Theme::SPACING_MD, -Theme::SPACING_MD),
                 )
                 .interactable(false)
                 .show(ctx, |ui| {
