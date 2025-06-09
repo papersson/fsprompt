@@ -68,6 +68,10 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             name: fsprompt-x86_64-pc-windows-msvc
+          # Linux build
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: fsprompt-x86_64-unknown-linux-gnu
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -122,6 +126,9 @@ jobs:
           - os: windows-latest
             arch: x86_64
             target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -258,3 +265,46 @@ jobs:
           asset_path: ./fsprompt-v0.1.0-x86_64-pc-windows-msvc-setup.exe
           asset_name: fsprompt-${{ github.ref_name }}-x86_64-pc-windows-msvc-setup.exe
           asset_content_type: application/vnd.microsoft.portable-executable
+
+      - name: Build Debian Package
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          # Create debian package structure
+          VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+          ARCH="amd64"
+          PKG_NAME="fsprompt_${VERSION}_${ARCH}"
+          
+          mkdir -p $PKG_NAME/DEBIAN
+          mkdir -p $PKG_NAME/usr/local/bin
+          
+          # Copy binary
+          cp target/${{ matrix.target }}/release/fsprompt $PKG_NAME/usr/local/bin/
+          chmod 755 $PKG_NAME/usr/local/bin/fsprompt
+          
+          # Create control file
+          cat > $PKG_NAME/DEBIAN/control << EOF
+          Package: fsprompt
+          Version: $VERSION
+          Architecture: $ARCH
+          Maintainer: fsPrompt Contributors <noreply@github.com>
+          Description: High-performance filesystem prompt generator for LLMs
+           fsPrompt converts filesystem structures and file contents into
+           XML or Markdown format optimized for AI consumption.
+          Homepage: https://github.com/patrikpersson/codext-rs
+          Priority: optional
+          Section: utils
+          EOF
+          
+          # Build the package
+          dpkg-deb --build $PKG_NAME
+          
+      - name: Upload Debian Package
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./fsprompt_0.1.0_amd64.deb
+          asset_name: fsprompt-${{ github.ref_name }}-amd64.deb
+          asset_content_type: application/vnd.debian.binary-package
