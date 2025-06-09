@@ -34,7 +34,7 @@ jobs:
             
             ### Installation
             
-            See the [README](https://github.com/patrikpersson/codext-rs#installation) for detailed installation instructions.
+            See the [README](https://github.com/papersson/fsprompt#installation) for detailed installation instructions.
             
             #### macOS
             - Intel: `fsprompt-${{ github.ref_name }}-x86_64-apple-darwin.pkg`
@@ -267,7 +267,7 @@ jobs:
           asset_content_type: application/vnd.microsoft.portable-executable
 
       - name: Build Debian Package
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           # Create debian package structure
           VERSION=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
@@ -290,7 +290,7 @@ jobs:
           Description: High-performance filesystem prompt generator for LLMs
            fsPrompt converts filesystem structures and file contents into
            XML or Markdown format optimized for AI consumption.
-          Homepage: https://github.com/patrikpersson/codext-rs
+          Homepage: https://github.com/papersson/fsprompt
           Priority: optional
           Section: utils
           EOF
@@ -298,13 +298,19 @@ jobs:
           # Build the package
           dpkg-deb --build $PKG_NAME
           
+          # Rename to a predictable name
+          mv ${PKG_NAME}.deb fsprompt-latest-amd64.deb
+          
+          # List the created files for debugging
+          ls -la *.deb
+          
       - name: Upload Debian Package
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./fsprompt_0.1.0_amd64.deb
+          asset_path: ./fsprompt-latest-amd64.deb
           asset_name: fsprompt-${{ github.ref_name }}-amd64.deb
           asset_content_type: application/vnd.debian.binary-package

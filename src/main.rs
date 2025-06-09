@@ -36,11 +36,38 @@ use ui::{
     Theme as UiTheme,
 };
 
+/// Loads the application icon
+fn load_icon() -> egui::IconData {
+    // For now, we'll create a placeholder icon
+    // You should replace this with your actual icon file
+    // Create a simple 64x64 icon placeholder
+    let size = 64;
+    let mut rgba = Vec::with_capacity(size * size * 4);
+
+    // Create a simple gradient as placeholder
+    for y in 0..size {
+        for x in 0..size {
+            // Blue gradient
+            rgba.push(0);
+            rgba.push((x * 255 / size) as u8);
+            rgba.push((y * 255 / size) as u8);
+            rgba.push(255);
+        }
+    }
+
+    egui::IconData {
+        rgba,
+        width: size as u32,
+        height: size as u32,
+    }
+}
+
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0])
-            .with_min_inner_size([640.0, 480.0]),
+            .with_min_inner_size([640.0, 480.0])
+            .with_icon(load_icon()),
         ..Default::default()
     };
 
